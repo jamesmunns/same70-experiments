@@ -1,7 +1,7 @@
 #![no_main]
 #![no_std]
 
-use {{crate_name}} as _; // global logger + panicking-behavior + memory layout
+use same70_bringup as _; // global logger + panicking-behavior + memory layout
 use defmt::Format; // <- derive attribute
 
 #[derive(Format)]
@@ -25,5 +25,5 @@ fn main() -> ! {
     let x = 42;
     defmt::println!("x={=u8}", x);
 
-    {{crate_name}}::exit()
+    same70_bringup::exit()
 }

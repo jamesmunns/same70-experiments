@@ -157,14 +157,16 @@ fn write_uart(regs: &UARTRegisterBlock, word: u8) -> nb::Result<(), Error> {
     }
 }
 
-fn write_usart(regs: &USARTRegisterBlock, word: u8) -> nb::Result<(), Error> {
-    if regs.us_csr.read().txempty().bit_is_clear() {
-        Err(nb::Error::WouldBlock)
-    } else {
-        regs.us_thr
-            .write(|w| unsafe { w.txchr().bits(word as u16) });
-        Ok(())
-    }
+fn write_usart(_regs: &USARTRegisterBlock, _word: u8) -> nb::Result<(), Error> {
+    // TODO(AJM): Regsiter re-name?
+    unimplemented!("Bad register name?");
+    // if regs.us_csr.read().txempty().bit_is_clear() {
+    //     Err(nb::Error::WouldBlock)
+    // } else {
+    //     regs.us_thr
+    //         .write(|w| unsafe { w.txchr().bits(word as u16) });
+    //     Ok(())
+    // }
 }
 
 fn flush_uart(regs: &UARTRegisterBlock) -> nb::Result<(), Error> {
@@ -175,10 +177,12 @@ fn flush_uart(regs: &UARTRegisterBlock) -> nb::Result<(), Error> {
     }
 }
 
-fn flush_usart(regs: &USARTRegisterBlock) -> nb::Result<(), Error> {
-    if regs.us_csr.read().txempty().bit_is_clear() {
-        Err(nb::Error::WouldBlock)
-    } else {
-        Ok(())
-    }
+fn flush_usart(_regs: &USARTRegisterBlock) -> nb::Result<(), Error> {
+    // TODO(AJM): Regsiter re-name?
+    unimplemented!("Bad register name?");
+    // if regs.us_csr.read().txempty().bit_is_clear() {
+    //     Err(nb::Error::WouldBlock)
+    // } else {
+    //     Ok(())
+    // }
 }

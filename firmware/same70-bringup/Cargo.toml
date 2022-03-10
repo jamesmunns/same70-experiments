@@ -1,8 +1,7 @@
 [package]
-# TODO(1) fix `authors` and `name` if you didn't use `cargo-generate`
-authors = ["{{authors}}"]
-name = "{{project-name}}"
-edition = "2018"
+authors = ["James Munns <james@onevariable.com>"]
+name = "same70-bringup"
+edition = "2021"
 version = "0.1.0"
 
 [lib]
@@ -19,8 +18,10 @@ cortex-m-rt = "0.7.0"
 defmt = "0.3.0"
 defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
-# TODO(4) enter your HAL here
-# some-hal = "1.2.3"
+
+[dependencies.atsamx7x-hal]
+path = "../../vendor/atsamx7x-hal"
+features = ["same70q21b-rt"]
 
 [dev-dependencies]
 defmt-test = "0.3.0"
