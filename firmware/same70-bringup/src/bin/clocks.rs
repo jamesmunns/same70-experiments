@@ -1,3 +1,7 @@
+//! Experimenting with the clock configuration
+//!
+//! This has been superceded by `same70_bringup::clock_setup()`.
+
 #![no_main]
 #![no_std]
 
