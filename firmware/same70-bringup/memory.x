@@ -6,5 +6,5 @@ MEMORY
 
   /* "Internal Flash" */
   /* TODO: This should be 384KiB? */
-  RAM : ORIGIN = 0x20400000, LENGTH = 256K
+  RAM : ORIGIN = 0x20401000, LENGTH = 256K
 }

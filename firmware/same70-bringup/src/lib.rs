@@ -3,7 +3,7 @@
 
 use defmt_rtt as _; // global logger
 
-use atsamx7x_hal as _; // memory layout
+pub use atsamx7x_hal as hal; // memory layout
 
 use panic_probe as _;
 
