@@ -21,16 +21,22 @@ use cortex_m::asm::delay;
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    defmt::println!("Start");
+    // Obtain PAC-level access
+    let board = hal::target_device::Peripherals::take().unwrap();
+
+    let val = board.PMC.ckgr_mor.read().bits();
+
+    defmt::println!("Start - val: {=u32}", val);
 
     for _ in 0..5 {
         delay(12_000_000);
         defmt::println!("Ding...");
     }
 
+    // Note: This is necessary to reach 300MHz operation. Otherwise a hard-fault occurs.
+    // We should ALSO probably enable ICACHE to offset the increased wait states, but
+    // lets leave it as-is for now...
     defmt::println!("End. Increasing Flash Wait States to 6...");
-
-    let board = hal::target_device::Peripherals::take().unwrap();
     board.EFC.eefc_wpmr.modify(|_r, w| {
         w.wpkey().passwd();
         w.wpen().clear_bit();
@@ -129,11 +135,14 @@ fn main() -> ! {
     // c. Program PMC_MCKR.MDIV.
     // d. Wait for PMC_SR.MCKRDY to be set.
     board.PMC.pmc_mckr.modify(|_r, w| {
+        // NOTE: "AT12874" 'Getting Started' guide recommended this,
+        // I'm unsure of what the "limit" is, though this now sets
+        // our peripheral clock to a base of 150MHz.
         w.mdiv().pck_div2()
     });
     while board.PMC.pmc_sr.read().mckrdy().bit_is_clear() { }
 
-    // defmt::println!("Switch PLLA!");
+    defmt::println!("Switch PLLA!");
 
     // e. Program PMC_MCKR.CSS.
     // f. Wait for PMC_SR.MCKRDY to be set.
