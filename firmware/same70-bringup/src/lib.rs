@@ -5,7 +5,7 @@ use defmt_rtt as _; // global logger
 
 pub use atsamx7x_hal as hal; // memory layout
 
-use hal::target_device::Peripherals;
+use hal::target_device::{Peripherals, WDT};
 use panic_probe as _;
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
@@ -39,6 +39,13 @@ mod unit_tests {
 /// Perform fixed, application-specific setup.
 pub fn fixed_setup(board: &Peripherals) {
     clock_setup(board);
+    disable_watchdog(board);
+}
+
+pub fn disable_watchdog(board: &Peripherals) {
+    board.WDT.wdt_mr.modify(|_r, w| {
+        w.wddis().set_bit()
+    });
 }
 
 // Set clocks to a CPU frequency of 300MHz, with seven flash wait states,
@@ -181,4 +188,16 @@ fn clock_setup(board: &Peripherals) {
     // MCK is MAINCK divided by 2.
 
     // NOTE: Skipping step 9, as we don't need any peripherals (yet).
+}
+
+pub fn pet_watchdog() {
+    let wdt = unsafe {
+        &*WDT::ptr()
+    };
+
+    wdt.wdt_cr.write(|w| {
+        w.key().passwd();
+        w.wdrstt().set_bit();
+        w
+    });
 }
