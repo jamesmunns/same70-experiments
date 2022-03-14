@@ -3,6 +3,8 @@
 
 use same70_bringup::{self as _, fixed_setup, hal}; // global logger + panicking-behavior + memory layout
 use cortex_m::asm::delay;
+use groundhog::RollingTimer;
+use same70_bringup::GlobalRollingTimer;
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -13,6 +15,8 @@ fn main() -> ! {
 
     // Setup with general purpose settings
     fixed_setup(&board);
+    GlobalRollingTimer::init(board.RTT);
+    let timer = GlobalRollingTimer::default();
 
     defmt::println!("Blankin.");
 
@@ -45,27 +49,22 @@ fn main() -> ! {
 
     let mut ctr = 0;
 
-    let val = board.WDT.wdt_mr.read().bits();
-    defmt::println!("{=u32:08X}", val);
-
     loop {
+        let start = timer.get_ticks();
+
         defmt::println!("{=u32}", ctr);
         board.PIOA.pio_codr.write(|w| {
             // Clear bit
             w.p5().set_bit()
         });
-        delay(100_000_000);
+        while timer.millis_since(start) <= 250 { }
+
         board.PIOA.pio_sodr.write(|w| {
             // set bit
             w.p5().set_bit()
         });
         delay(200_000_000);
         ctr += 1;
+        while timer.ticks_since(start) <= 1000 { }
     }
 }
-
-
-// WDT MR: 3FFF_2FFF
-// enabled
-// does reset
-// no interrupt
