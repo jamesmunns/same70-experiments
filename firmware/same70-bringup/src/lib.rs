@@ -9,6 +9,7 @@ pub use atsamx7x_hal as hal; // memory layout
 
 use hal::target_device::{Peripherals, WDT, RTT};
 use panic_probe as _;
+pub mod gmac;
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
 // this prevents the panic message being printed *twice* when `defmt::panic` is invoked
@@ -38,14 +39,17 @@ mod unit_tests {
     }
 }
 
-defmt::timestamp!("{=u32:us}", {
-    GlobalRollingTimer::default().get_ticks().wrapping_mul(1_000_000 / GlobalRollingTimer::TICKS_PER_SECOND)
+defmt::timestamp!("{=u32:010}", {
+    GlobalRollingTimer::default().get_ticks()
 });
 
 /// Perform fixed, application-specific setup.
 pub fn fixed_setup(board: &Peripherals) {
     clock_setup(board);
     disable_watchdog(board);
+    enable_pio_a(board);
+    enable_pio_c(board);
+    enable_pio_d(board);
 }
 
 pub fn disable_watchdog(board: &Peripherals) {
@@ -53,6 +57,270 @@ pub fn disable_watchdog(board: &Peripherals) {
         w.wddis().set_bit()
     });
 }
+
+/// Enable PIO A, map pins
+///
+/// * map PA05 as an output (it is the LED)
+pub fn enable_pio_a(board: &Peripherals) {
+    // NOTE: PMC Write protect has already been disabled
+    // in `fixed_setup`.
+
+    // Enable PIOA
+    board.PMC.pmc_pcer0.write(|w| {
+        w.pid10().set_bit()
+    });
+
+    // Disable PIOA Write protection
+    board.PIOA.pio_wpmr.modify(|_r, w| {
+        w.wpkey().passwd();
+        w.wpen().clear_bit();
+        w
+    });
+
+//    /************************ PIO A Initialization ************************/
+//    /* PORTA Peripheral Function Selection */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_ABCDSR[0]= 0x2000000;
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_ABCDSR[1]= 0xde000000;
+    board.PIOA.pio_abcdsr[0].write(|w| {
+        w.p29().set_bit() // SIGDET
+    });
+    board.PIOA.pio_abcdsr[1].write(|w| {
+        w.p31().set_bit(); // ?
+        w.p30().set_bit(); // ?
+        w.p28().set_bit(); // ?
+        w.p27().set_bit(); // ?
+        w.p26().set_bit(); // ?
+        w.p25().set_bit(); // ?
+        w
+    });
+
+//    /* PORTA PIO Disable and Peripheral Enable*/
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_PDR = 0xde200000;
+    board.PIOA.pio_pdr.write(|w| unsafe { w.bits(0xDE20_0000)});
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_PER = ~0xde200000;
+    board.PIOA.pio_per.write(|w| unsafe { w.bits(!0xDE20_0000)});
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_MDDR = 0xFFFFFFFF;
+    board.PIOA.pio_mddr.write(|w| unsafe { w.bits(0xFFFF_FFFF)});
+
+//    /* PORTA Pull Up Enable/Disable as per MHC selection */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_PUDR = ~0x800;
+    board.PIOA.pio_pudr.write(|w| unsafe { w.bits(!0x0000_0800)});
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_PUER = 0x800;
+    board.PIOA.pio_puer.write(|w| unsafe { w.bits(0x0000_0800)});
+
+//    /* PORTA Pull Down Enable/Disable as per MHC selection */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_PPDDR = 0xFFFFFFFF;
+    board.PIOA.pio_ppddr.write(|w| unsafe { w.bits(0xFFFF_FFFF)});
+
+//    /* PORTA Output Write Enable */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_OWER = PIO_OWER_Msk;
+    board.PIOA.pio_ower.write(|w| unsafe { w.bits(0xFFFF_FFFF)});
+
+//    /* PORTA Output Direction Enable */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_OER = 0x20;
+    board.PIOA.pio_oer.write(|w| {
+        // Pin PA05, LED, output
+        w.p5().set_bit()
+    });
+
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_ODR = ~0x20;
+    board.PIOA.pio_odr.write(|w| unsafe { w.bits(!0x0000_0020)});
+
+//    /* PORTA Initial state High */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_ODSR = 0x20;
+    board.PIOA.pio_odsr.write(|w| {
+        w.p5().set_bit()
+    });
+
+//    /* PORTA drive control */
+//    ((pio_registers_t*)PIO_PORT_A)->PIO_DRIVER = 0x0;
+    board.PIOA.pio_driver.write(|w| unsafe { w.bits(0x0000_0000)});
+
+/*
+    ### Ethernet Pins
+
+    | Pin     | Name1           | Name2             |
+    | :---    | :---            | :---              |
+    | PA29    | GPIO            | SIGDET            |
+    | PA19    | GPIO            | GPIO0 (N/C?)      |
+    | PA02    | WKUP2           | GPIO2             |
+*/
+}
+
+// enable_pio_b - Not needed yet? Seems to be used mostly for UART.
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_ABCDSR[0]= 0x10;
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_ABCDSR[1]= 0x10;
+    // /* PORTB PIO Disable and Peripheral Enable*/
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_PDR = 0x10;
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_PER = ~0x10;
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_MDDR = 0xFFFFFFFF;
+    // /* PORTB Pull Up Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_PUDR = 0xFFFFFFFF;
+    //  PORTB Pull Down Enable/Disable as per MHC selection
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_PPDDR = 0xFFFFFFFF;
+    // /* PORTB Output Write Enable */
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_OWER = PIO_OWER_Msk;
+    // /* PORTB Output Direction Enable */
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_OER = 0x100;
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_ODR = ~0x100;
+    // /* PORTB Initial state High */
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_ODSR = 0x100;
+    // /* PORTB drive control */
+    // ((pio_registers_t*)PIO_PORT_B)->PIO_DRIVER = 0x0;
+
+pub fn enable_pio_c(board: &Peripherals) {
+    // NOTE: PMC Write protect has already been disabled
+    // in `fixed_setup`.
+
+    // Enable PIOC
+    board.PMC.pmc_pcer0.write(|w| {
+        w.pid12().set_bit()
+    });
+
+    // Disable PIOC Write protection
+    board.PIOC.pio_wpmr.modify(|_r, w| {
+        w.wpkey().passwd();
+        w.wpen().clear_bit();
+        w
+    });
+
+    // /************************ PIO C Initialization ************************/
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_PER = 0xFFFFFFFF;
+    board.PIOC.pio_per.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_MDDR = 0xFFFFFFFF;
+    board.PIOC.pio_mddr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTC Pull Up Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_PUDR = 0xFFFFFFFF;
+    board.PIOC.pio_pudr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTC Pull Down Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_PPDDR = 0xFFFFFFFF;
+    board.PIOC.pio_ppddr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTC Output Write Enable */
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_OWER = PIO_OWER_Msk;
+    board.PIOC.pio_ower.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTC Output Direction Enable */
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_OER = 0x0;
+    board.PIOC.pio_oer.write(|w| unsafe { w.bits(0x0000_0000) });
+
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_ODR = ~0x0;
+    board.PIOC.pio_odr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTC Initial state High */
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_ODSR = 0x0;
+    board.PIOC.pio_odsr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTC drive control */
+    // ((pio_registers_t*)PIO_PORT_C)->PIO_DRIVER = 0x0;
+    board.PIOC.pio_driver.write(|w| unsafe { w.bits(0x0000_0000) });
+
+/*
+    ### Ethernet Pins
+
+    | Pin     | Name1           | Name2             |
+    | :---    | :---            | :---              |
+    | PC10    | GPIO            | nRST              |
+    | PC19    | ISI_PWD         | CS                |
+*/
+}
+
+pub fn enable_pio_d(board: &Peripherals) {
+    // NOTE: PMC Write protect has already been disabled
+    // in `fixed_setup`.
+
+    // Enable PIOD
+    board.PMC.pmc_pcer0.write(|w| {
+        w.pid16().set_bit()
+    });
+
+    // Disable PIOD Write protection
+    board.PIOD.pio_wpmr.modify(|_r, w| {
+        w.wpkey().passwd();
+        w.wpen().clear_bit();
+        w
+    });
+
+    // /************************ PIO D Initialization ************************/
+    // /* PORTD PIO Disable and Peripheral Enable*/
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_PDR = 0x3ff;
+    board.PIOD.pio_pdr.write(|w| unsafe { w.bits(0x0000_03FF) });
+
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_PER = ~0x3ff;
+    board.PIOD.pio_per.write(|w| unsafe { w.bits(!0x0000_03FF) });
+
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_MDDR = 0xFFFFFFFF;
+    board.PIOD.pio_mddr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTD Pull Up Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_PUDR = 0xFFFFFFFF;
+    board.PIOD.pio_pudr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTD Pull Down Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_PPDDR = 0xFFFFFFFF;
+    board.PIOD.pio_ppddr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTD Output Write Enable */
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_OWER = PIO_OWER_Msk;
+    board.PIOD.pio_ower.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTD Output Direction Enable */
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_OER = 0x0;
+    board.PIOD.pio_oer.write(|w| unsafe { w.bits(0x0000_0000) });
+
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_ODR = ~0x0;
+    board.PIOD.pio_odr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+
+    // /* PORTD Initial state High */
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_ODSR = 0x0;
+    board.PIOD.pio_odsr.write(|w| unsafe { w.bits(0x0) });
+
+    // /* PORTD drive control */
+    // ((pio_registers_t*)PIO_PORT_D)->PIO_DRIVER = 0x0;
+    board.PIOD.pio_driver.write(|w| unsafe { w.bits(0x0) });
+
+/*
+    ### Ethernet Pins
+
+    | Pin     | Name1           | Name2             |
+    | :---    | :---            | :---              |
+    | PD00    | GTXCK           | TXCK              |
+    | PD01    | GTXEN           | TXEN              |
+    | PD02    | GTX0            | TXD0              |
+    | PD03    | GTX1            | TXD1              |
+    | PD04    | GRXDV           | RXDV              |
+    | PD05    | GRX0            | RXD0              |
+    | PD06    | GRX1            | RXD1              |
+    | PD07    | GRXER           | RXER              |
+    | PD08    | GMDC            | MDC               |
+    | PD09    | GMDIO           | MDIO              |
+    | PD21    | SPI0_MOSI       | MOSI              |
+    | PD20    | SPI0_MISO       | MISO              |
+    | PD22    | SPI0_SPCK       | SCLK              |
+    | PD28    | WKUP5           | GPIO1             |
+*/
+}
+
+// enable_pio_e - not needed (yet?)
+    // /************************ PIO E Initialization ************************/
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_PER = 0xFFFFFFFF;
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_MDDR = 0xFFFFFFFF;
+    // /* PORTE Pull Up Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_PUDR = 0xFFFFFFFF;
+    // /* PORTE Pull Down Enable/Disable as per MHC selection */
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_PPDDR = 0xFFFFFFFF;
+    // /* PORTE Output Write Enable */
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_OWER = PIO_OWER_Msk;
+    // /* PORTE Output Direction Enable */
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_OER = 0x0;
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_ODR = ~0x0;
+    // /* PORTE Initial state High */
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_ODSR = 0x0;
+    // /* PORTE drive control */
+    // ((pio_registers_t*)PIO_PORT_E)->PIO_DRIVER = 0x0;
 
 // Set clocks to a CPU frequency of 300MHz, with seven flash wait states,
 // and a peripheral frequency of 150MHz.
@@ -194,6 +462,13 @@ fn clock_setup(board: &Peripherals) {
     // MCK is MAINCK divided by 2.
 
     // NOTE: Skipping step 9, as we don't need any peripherals (yet).
+
+    // TODO(AJM): This:
+
+    // /* Enable Peripheral Clock */
+    // PMC_REGS->PMC_PCER0=0x875c00;
+    // PMC_REGS->PMC_PCER1=0x4000080;
+
 }
 
 pub fn pet_watchdog() {
@@ -283,8 +558,6 @@ impl RollingTimer for GlobalRollingTimer {
             }
             last = new;
         }
-
-
     }
 
     fn is_initialized(&self) -> bool {

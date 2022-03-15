@@ -20,33 +20,6 @@ fn main() -> ! {
 
     defmt::println!("Blankin.");
 
-    // NOTE: PMC Write protect has already been disabled
-    // in `fixed_setup`.
-
-    // Enable PIOA
-    board.PMC.pmc_pcer0.write(|w| {
-        w.pid10().set_bit()
-    });
-
-    // Disable PIO Write protection
-    board.PIOA.pio_wpmr.modify(|_r, w| {
-        w.wpkey().passwd();
-        w.wpen().clear_bit();
-        w
-    });
-
-    board.PIOA.pio_per.write(|w| {
-        // Pin PA05, LED, enabled
-        w.p5().set_bit()
-    });
-
-    board.PIOA.pio_oer.write(|w| {
-        // Pin PA05, LED, output
-        w.p5().set_bit()
-    });
-
-    defmt::println!("Loopin!");
-
     let mut ctr = 0;
 
     loop {
