@@ -1,4 +1,7 @@
 use atsamx7x_hal::target_device::GMAC;
+use groundhog::RollingTimer;
+
+use crate::GlobalRollingTimer;
 
 const NUM_RX_BUFS: usize = 4;
 const NUM_TX_BUFS: usize = 4;
@@ -101,6 +104,8 @@ impl Gmac {
     }
 
     pub fn miim_post_setup(&mut self) {
+        let timer = GlobalRollingTimer::default();
+
         defmt::println!("Starting MIIM setup");
         defmt::println!("Enabling management port...");
         self.miim_mgmt_port_enable();
@@ -113,13 +118,29 @@ impl Gmac {
         defmt::println!("Reset PHY...");
 
         self.miim_write_data(0, 0x8000); // 0.15: Software reset
-        while self.miim_is_busy() { }
+        let start = timer.get_ticks();
+
+        // TODO: How long SHOULD this be?
+        while self.miim_is_busy() || (timer.millis_since(start) < 5) { }
+
         self.miim_start_read(0);
         while self.miim_is_busy() { }
         let val = self.miim_read_data_get();
         defmt::println!("New Reg 0 Val: {=u16:04X}", val);
 
-        return
+        // TODO: Skipping Autonegotiation Adv step (reg 4)...
+        // TODO: Skipping Autonegotiation restart since we didn't change anything...
+
+        // Wait for link to come up
+        loop {
+            self.miim_start_read(1);
+            while self.miim_is_busy() { }
+            let val = self.miim_read_data_get();
+            if (val & 0x0004) != 0 {
+                defmt::println!("Link up!");
+                break;
+            }
+        }
     }
 
     pub fn init(&mut self) {
@@ -402,12 +423,12 @@ impl Gmac {
         // DRV_PIC32CGMAC_LibSysInt_Enable
 
         // DRV_PIC32CGMAC_LibTransferEnable
-        // self.periph.gmac_ncr.modify(|_r, w| {
-        //     w.txen().set_bit();
-        //     w.rxen().set_bit();
-        //     w.westat().set_bit();
-        //     w
-        // });
+        self.periph.gmac_ncr.modify(|_r, w| {
+            w.txen().set_bit();
+            w.rxen().set_bit();
+            w.westat().set_bit();
+            w
+        });
 
     }
 }
