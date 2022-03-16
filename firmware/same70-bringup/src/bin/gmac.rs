@@ -26,11 +26,16 @@ fn main() -> ! {
     defmt::println!("Initializing...");
     gmac.init();
 
-    defmt::println!("Polling...");
-    loop {
-        if gmac.did_it_work() {
-            defmt::println!("Worked!");
-            same70_bringup::exit();
-        }
-    }
+    defmt::println!("MIIM setup...");
+    gmac.miim_post_setup();
+
+    same70_bringup::exit();
+
+    // defmt::println!("Polling...");
+    // loop {
+    //     if gmac.did_it_work() {
+    //         defmt::println!("Worked!");
+    //         same70_bringup::exit();
+    //     }
+    // }
 }

@@ -34,6 +34,94 @@ impl Gmac {
         }
     }
 
+    // pub fn mac_preinit(&mut self) {
+        // DRV_MIIM_Setup:
+        //     _DRV_MIIM_ETH_ENABLE
+        //         noop
+        //     _DRV_MIIM_MII_RELEASE_RESET
+        //         noop
+        //     _DRV_MIIM_SMIClockSet
+        //         This is already handled in `init` by `w.clk().mck_64();` in NCFGR
+        //     _DRV_MIIM_SETUP_PREAMBLE
+        //         noop
+        //     _DRV_MIIM_SCAN_INCREMENT
+        //         noop
+    // }
+
+    fn miim_mgmt_port_enable(&mut self) {
+        self.periph.gmac_ncr.modify(|_r, w| {
+            w.mpe().set_bit()
+        });
+    }
+
+    fn miim_mgmt_port_disable(&mut self) {
+        self.periph.gmac_ncr.modify(|_r, w| {
+            w.mpe().clear_bit()
+        });
+    }
+
+    fn miim_is_busy(&mut self) -> bool {
+        self.periph.gmac_nsr.read().idle().bit_is_clear()
+    }
+
+    fn miim_write_data(&mut self, reg_idx: u8, op_data: u16) {
+        self.periph.gmac_man.write(|w| {
+            w.wzo().clear_bit();
+            w.cltto().set_bit();
+            unsafe {
+                w.op().bits(0b01);
+                w.wtn().bits(0b10);
+                // TODO: Hardcoded PHY Address
+                w.phya().bits(0);
+                w.rega().bits(reg_idx);
+                w.data().bits(op_data);
+            }
+            w
+        });
+    }
+
+    fn miim_start_read(&mut self, reg_idx: u8) {
+        self.periph.gmac_man.write(|w| {
+            w.wzo().clear_bit();
+            w.cltto().set_bit();
+            unsafe {
+                w.op().bits(0b10);
+                w.wtn().bits(0b10);
+                // TODO: Hardcoded PHY Address
+                w.phya().bits(0);
+                w.rega().bits(reg_idx);
+                w.data().bits(0);
+            }
+            w
+        });
+    }
+
+    fn miim_read_data_get(&mut self) -> u16 {
+        self.periph.gmac_man.read().data().bits()
+    }
+
+    pub fn miim_post_setup(&mut self) {
+        defmt::println!("Starting MIIM setup");
+        defmt::println!("Enabling management port...");
+        self.miim_mgmt_port_enable();
+
+        defmt::println!("Waiting for miim idle...");
+        let val = self.periph.gmac_nsr.read().bits();
+        defmt::println!("{=u32:08X}", val);
+        while self.miim_is_busy() { }
+
+        defmt::println!("Reset PHY...");
+
+        self.miim_write_data(0, 0x8000); // 0.15: Software reset
+        while self.miim_is_busy() { }
+        self.miim_start_read(0);
+        while self.miim_is_busy() { }
+        let val = self.miim_read_data_get();
+        defmt::println!("New Reg 0 Val: {=u16:04X}", val);
+
+        return
+    }
+
     pub fn init(&mut self) {
         // Based on DRV_PIC32CGMAC_LibInit
         // //disable Tx
@@ -45,6 +133,10 @@ impl Gmac {
             w.rxen().clear_bit();
             w
         });
+
+        if self.miim_is_busy() {
+            defmt::println!("Busy at start???");
+        }
 
         // //disable all GMAC interrupts for QUEUE 0
         // GMAC_REGS->GMAC_IDR = GMAC_INT_ALL;
@@ -310,12 +402,12 @@ impl Gmac {
         // DRV_PIC32CGMAC_LibSysInt_Enable
 
         // DRV_PIC32CGMAC_LibTransferEnable
-        self.periph.gmac_ncr.modify(|_r, w| {
-            w.txen().set_bit();
-            w.rxen().set_bit();
-            w.westat().set_bit();
-            w
-        });
+        // self.periph.gmac_ncr.modify(|_r, w| {
+        //     w.txen().set_bit();
+        //     w.rxen().set_bit();
+        //     w.westat().set_bit();
+        //     w
+        // });
 
     }
 }

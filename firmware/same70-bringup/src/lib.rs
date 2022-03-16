@@ -46,6 +46,10 @@ defmt::timestamp!("{=u32:010}", {
 /// Perform fixed, application-specific setup.
 pub fn fixed_setup(board: &Peripherals) {
     clock_setup(board);
+
+    board.PMC.pmc_pcer0.write(|w| unsafe { w.bits(0x0087_5C00) }); // ??
+    board.PMC.pmc_pcer1.write(|w| unsafe { w.bits(0x0400_0080) }); // ??
+
     disable_watchdog(board);
     enable_pio_a(board);
     enable_pio_c(board);
@@ -64,11 +68,6 @@ pub fn disable_watchdog(board: &Peripherals) {
 pub fn enable_pio_a(board: &Peripherals) {
     // NOTE: PMC Write protect has already been disabled
     // in `fixed_setup`.
-
-    // Enable PIOA
-    board.PMC.pmc_pcer0.write(|w| {
-        w.pid10().set_bit()
-    });
 
     // Disable PIOA Write protection
     board.PIOA.pio_wpmr.modify(|_r, w| {
@@ -172,11 +171,6 @@ pub fn enable_pio_c(board: &Peripherals) {
     // NOTE: PMC Write protect has already been disabled
     // in `fixed_setup`.
 
-    // Enable PIOC
-    board.PMC.pmc_pcer0.write(|w| {
-        w.pid12().set_bit()
-    });
-
     // Disable PIOC Write protection
     board.PIOC.pio_wpmr.modify(|_r, w| {
         w.wpkey().passwd();
@@ -231,11 +225,6 @@ pub fn enable_pio_c(board: &Peripherals) {
 pub fn enable_pio_d(board: &Peripherals) {
     // NOTE: PMC Write protect has already been disabled
     // in `fixed_setup`.
-
-    // Enable PIOD
-    board.PMC.pmc_pcer0.write(|w| {
-        w.pid16().set_bit()
-    });
 
     // Disable PIOD Write protection
     board.PIOD.pio_wpmr.modify(|_r, w| {
@@ -468,7 +457,6 @@ fn clock_setup(board: &Peripherals) {
     // /* Enable Peripheral Clock */
     // PMC_REGS->PMC_PCER0=0x875c00;
     // PMC_REGS->PMC_PCER1=0x4000080;
-
 }
 
 pub fn pet_watchdog() {
