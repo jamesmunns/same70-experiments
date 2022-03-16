@@ -29,13 +29,16 @@ fn main() -> ! {
     defmt::println!("MIIM setup...");
     gmac.miim_post_setup();
 
-    same70_bringup::exit();
+    // same70_bringup::exit();
 
-    // defmt::println!("Polling...");
-    // loop {
-    //     if gmac.did_it_work() {
-    //         defmt::println!("Worked!");
-    //         same70_bringup::exit();
-    //     }
-    // }
+    defmt::println!("Polling...");
+    loop {
+        if gmac.did_it_work() {
+            defmt::println!("Worked!");
+            unsafe {
+                gmac.danger_read();
+            }
+            same70_bringup::exit();
+        }
+    }
 }

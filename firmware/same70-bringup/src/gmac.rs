@@ -143,6 +143,21 @@ impl Gmac {
         }
     }
 
+    pub unsafe fn danger_read(&mut self) {
+        let rx_desc_ptr: *const RxBufferDescriptor = RX_BUF_DESCS.as_ptr();
+        let desc = rx_desc_ptr.read_volatile();
+        defmt::println!("RXBD0: {=u32:08X}", desc.word_0);
+        defmt::println!("RXBD1: {=u32:08X}", desc.word_1);
+        let len = (desc.word_1 & 0x0000_0FFF) as usize;
+        defmt::println!("Len: {=usize}", len);
+
+        let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
+        let buf_cpy = rx_buf_ptr.read_volatile();
+        let bufsl = &buf_cpy.buf[..len];
+        defmt::println!("Data:");
+        defmt::println!("{=[u8]:02X}", bufsl);
+    }
+
     pub fn init(&mut self) {
         // Based on DRV_PIC32CGMAC_LibInit
         // //disable Tx
