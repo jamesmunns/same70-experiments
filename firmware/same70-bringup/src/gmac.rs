@@ -1,6 +1,6 @@
 use core::{cell::UnsafeCell, ptr::NonNull, ops::{Deref, DerefMut}};
 
-use atsamx7x_hal::target_device::GMAC;
+use atsamx7x_hal::target_device::{GMAC, generic::Reg, gmac::{gmac_idrpq::GMAC_IDRPQ_SPEC, gmac_isrpq::GMAC_ISRPQ_SPEC}};
 use groundhog::RollingTimer;
 
 use crate::GlobalRollingTimer;
@@ -16,6 +16,8 @@ static RX_BUF_DESCS: [RxBufferDescriptor; NUM_RX_BUFS] = [RX_BUF_DESC_DEFAULT; N
 static RX_BUFS: [RxBuffer; NUM_RX_BUFS] = [RX_BUF_DEFAULT; NUM_RX_BUFS];
 static TX_BUF_DESCS: [TxBufferDescriptor; NUM_TX_BUFS] = [TX_BUF_DESC_DEFAULT; NUM_TX_BUFS];
 static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
+
+static UNUSED_TX_BUF_DESC: TxBufferDescriptor = TX_BUF_DESC_DEFAULT;
 
 pub struct Gmac {
     periph: GMAC,
@@ -101,7 +103,7 @@ impl WriteFrame {
     pub fn send(mut self, len: usize) {
         let desc = unsafe { self.desc.as_ref() };
         let old_w1 = desc.get_word_1();
-        let wrap_bit = (old_w1 & 0x4000_0000);
+        let wrap_bit = old_w1 & 0x4000_0000;
         let len = len.min(TX_BUF_SIZE).min(0x3FFF) as u32;
 
         let mut new_w1 = 0;
@@ -160,6 +162,9 @@ impl Gmac {
     }
 
     pub fn alloc_write_frame(&mut self) -> Option<WriteFrame> {
+        let tsr = self.periph.gmac_tsr.read().bits();
+        defmt::println!("TSR: {=u32:08x}", tsr);
+
         let desc = &TX_BUF_DESCS[self.next_tx_idx];
         let w1 = desc.get_word_1();
 
@@ -519,7 +524,14 @@ impl Gmac {
                 // not attempt to use this buffer until later.
                 desc.set_word_1(0x8000_0000);
             }
-            // Note: No need to mark "last buffer" yet.
+
+            // This is probably UB and should be fixed...
+            let last = &TX_BUF_DESCS[NUM_TX_BUFS - 1];
+            let mut word_1 = last.get_word_1();
+
+            // Mark as wrap buffer
+            word_1 |= 0x4000_0000;
+            last.set_word_1(word_1);
         }
 
         self.periph.gmac_tbqb.write(|w| unsafe {
@@ -533,6 +545,19 @@ impl Gmac {
             // ... and store it in the TBQB register
             w.bits(desc_wrd_msk)
         });
+
+        // Note! We need to stub out the prio queues
+        for buf in self.periph.gmac_tbqbapq.iter() {
+            // Take the buffer descriptor pointer...
+            let desc_ptr: *const TxBufferDescriptor = &UNUSED_TX_BUF_DESC;
+            let desc_wrd_raw: u32 = desc_ptr as u32;
+            let desc_wrd_msk: u32 = desc_wrd_raw & 0xFFFF_FFFC;
+
+            defmt::assert_eq!(desc_wrd_raw, desc_wrd_msk, "TX Buf Desc Alignment Wrong!");
+
+            // ... and store it in the TBQB register
+            buf.write(|w| unsafe { w.bits(desc_wrd_msk) });
+        }
 
         // DRV_PIC32CGMAC_LibInitTransfer
         let drbs = (RX_BUF_SIZE / 64).min(255) as u8;
