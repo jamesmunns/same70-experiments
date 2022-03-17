@@ -1,3 +1,5 @@
+use core::cell::UnsafeCell;
+
 use atsamx7x_hal::target_device::GMAC;
 use groundhog::RollingTimer;
 
@@ -11,12 +13,14 @@ const TX_BUF_SIZE: usize = 1024;
 // TODO: This needs a specific linker section (probably)
 // Todo: UnsafeCell?
 static mut RX_BUF_DESCS: [RxBufferDescriptor; NUM_RX_BUFS] = [RX_BUF_DESC_DEFAULT; NUM_RX_BUFS];
-static mut RX_BUFS: [RxBuffer; NUM_RX_BUFS] = [RX_BUF_DEFAULT; NUM_RX_BUFS];
+static RX_BUFS: [RxBuffer; NUM_RX_BUFS] = [RX_BUF_DEFAULT; NUM_RX_BUFS];
 static mut TX_BUF_DESCS: [TxBufferDescriptor; NUM_TX_BUFS] = [TX_BUF_DESC_DEFAULT; NUM_TX_BUFS];
-static mut TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
+static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 pub struct Gmac {
     periph: GMAC,
+    rd_idx: usize,
+    wr_idx: usize,
 }
 
 impl Gmac {
@@ -25,7 +29,9 @@ impl Gmac {
         defmt::println!("WARNING: Don't forget! We rely on configuration elsewhere for pins and stuff.");
 
         Self {
-            periph
+            periph,
+            rd_idx: 0,
+            wr_idx: 0,
         }
     }
 
@@ -141,6 +147,8 @@ impl Gmac {
                 break;
             }
         }
+
+        self.miim_mgmt_port_disable();
     }
 
     pub unsafe fn danger_read(&mut self) {
@@ -153,7 +161,7 @@ impl Gmac {
 
         let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
         let buf_cpy = rx_buf_ptr.read_volatile();
-        let bufsl = &buf_cpy.buf[..len];
+        let bufsl = &(*buf_cpy.buf.get())[..len];
         defmt::println!("Data:");
         defmt::println!("{=[u8]:02X}", bufsl);
     }
@@ -322,9 +330,9 @@ impl Gmac {
         // Table 38-2 describes "Receive Buffer Descriptor Entry"
         unsafe {
             // Set the receive buffer addresses in the upper word
-            for (desc, buf) in RX_BUF_DESCS.iter_mut().zip(RX_BUFS.iter_mut()) {
+            for (desc, buf) in RX_BUF_DESCS.iter_mut().zip(RX_BUFS.iter()) {
                 // Take the buffer pointer...
-                let buf_addr_ptr: *mut u8 = buf.buf.as_mut_ptr();
+                let buf_addr_ptr: *mut u8 = buf.buf.get().cast();
                 let buf_wrd_raw: u32 = buf_addr_ptr as u32;
                 let buf_wrd_msk: u32 = buf_wrd_raw & 0xFFFF_FFFC;
                 defmt::assert_eq!(buf_wrd_raw, buf_wrd_msk, "RX Buf Alignment Wrong!");
@@ -367,9 +375,9 @@ impl Gmac {
         // Table 38-3 describes "Transmit Buffer Descriptor Entry"
         unsafe {
             // Set the transmit buffer addresses in the upper word
-            for (desc, buf) in TX_BUF_DESCS.iter_mut().zip(TX_BUFS.iter_mut()) {
+            for (desc, buf) in TX_BUF_DESCS.iter_mut().zip(TX_BUFS.iter()) {
                 // Take the buffer pointer...
-                let buf_addr_ptr: *mut u8 = buf.buf.as_mut_ptr();
+                let buf_addr_ptr: *mut u8 = buf.buf.get().cast();
                 let buf_wrd_raw: u32 = buf_addr_ptr as u32;
                 let buf_wrd_msk: u32 = buf_wrd_raw & 0xFFFF_FFFC;
                 defmt::assert_eq!(buf_wrd_raw, buf_wrd_msk, "TX Buf Alignment Wrong!");
@@ -504,16 +512,19 @@ struct TxBufferDescriptor {
 
 #[repr(C, align(8))]
 struct RxBuffer {
-    buf: [u8; RX_BUF_SIZE],
+    buf: UnsafeCell<[u8; RX_BUF_SIZE]>,
 }
 
 #[repr(C, align(8))]
 struct TxBuffer {
-    buf: [u8; TX_BUF_SIZE],
+    buf: UnsafeCell<[u8; TX_BUF_SIZE]>,
 }
 
-const RX_BUF_DEFAULT: RxBuffer = RxBuffer { buf: [0u8; RX_BUF_SIZE] };
-const TX_BUF_DEFAULT: TxBuffer = TxBuffer { buf: [0u8; RX_BUF_SIZE] };
+unsafe impl Sync for RxBuffer { }
+unsafe impl Sync for TxBuffer { }
+
+const RX_BUF_DEFAULT: RxBuffer = RxBuffer { buf: UnsafeCell::new([0u8; RX_BUF_SIZE]) };
+const TX_BUF_DEFAULT: TxBuffer = TxBuffer { buf: UnsafeCell::new([0u8; TX_BUF_SIZE]) };
 
 const RX_BUF_DESC_DEFAULT: RxBufferDescriptor = RxBufferDescriptor {
     word_0: 0x0000_0000,

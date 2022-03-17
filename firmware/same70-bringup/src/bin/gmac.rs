@@ -2,8 +2,6 @@
 #![no_std]
 
 use same70_bringup::{self as _, fixed_setup, hal, gmac::Gmac}; // global logger + panicking-behavior + memory layout
-use cortex_m::asm::delay;
-use groundhog::RollingTimer;
 use same70_bringup::GlobalRollingTimer;
 
 #[cortex_m_rt::entry]
@@ -16,7 +14,7 @@ fn main() -> ! {
     // Setup with general purpose settings
     fixed_setup(&board);
     GlobalRollingTimer::init(board.RTT);
-    let timer = GlobalRollingTimer::default();
+    // let timer = GlobalRollingTimer::default();
 
     defmt::println!("Blankin.");
 
