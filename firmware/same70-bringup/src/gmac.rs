@@ -12,9 +12,9 @@ const TX_BUF_SIZE: usize = 1024;
 
 // TODO: This needs a specific linker section (probably)
 // Todo: UnsafeCell?
-static mut RX_BUF_DESCS: [RxBufferDescriptor; NUM_RX_BUFS] = [RX_BUF_DESC_DEFAULT; NUM_RX_BUFS];
+static RX_BUF_DESCS: [RxBufferDescriptor; NUM_RX_BUFS] = [RX_BUF_DESC_DEFAULT; NUM_RX_BUFS];
 static RX_BUFS: [RxBuffer; NUM_RX_BUFS] = [RX_BUF_DEFAULT; NUM_RX_BUFS];
-static mut TX_BUF_DESCS: [TxBufferDescriptor; NUM_TX_BUFS] = [TX_BUF_DESC_DEFAULT; NUM_TX_BUFS];
+static TX_BUF_DESCS: [TxBufferDescriptor; NUM_TX_BUFS] = [TX_BUF_DESC_DEFAULT; NUM_TX_BUFS];
 static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 pub struct Gmac {
@@ -35,11 +35,13 @@ impl Gmac {
         }
     }
 
+    // pub fn read_frame(&mut self) -> Option
+
     pub fn did_it_work(&mut self) -> bool {
         unsafe {
             let rx_desc_ptr: *const RxBufferDescriptor = RX_BUF_DESCS.as_ptr();
             let desc = rx_desc_ptr.read_volatile();
-            (desc.word_0 & 0x0000_0001) != 0
+            ((*desc.words.get())[0] & 0x0000_0001) != 0
         }
     }
 
@@ -152,16 +154,21 @@ impl Gmac {
     }
 
     pub unsafe fn danger_read(&mut self) {
-        let rx_desc_ptr: *const RxBufferDescriptor = RX_BUF_DESCS.as_ptr();
-        let desc = rx_desc_ptr.read_volatile();
-        defmt::println!("RXBD0: {=u32:08X}", desc.word_0);
-        defmt::println!("RXBD1: {=u32:08X}", desc.word_1);
-        let len = (desc.word_1 & 0x0000_0FFF) as usize;
+        let desc = &RX_BUF_DESCS[0];
+
+        let word_0 = desc.get_word_0();
+        let word_1 = desc.get_word_1();
+
+        defmt::println!("RXBD0: {=u32:08X}", word_0);
+        defmt::println!("RXBD1: {=u32:08X}", word_1);
+
+        let len = (word_1 & 0x0000_0FFF) as usize;
         defmt::println!("Len: {=usize}", len);
 
-        let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
-        let buf_cpy = rx_buf_ptr.read_volatile();
-        let bufsl = &(*buf_cpy.buf.get())[..len];
+        // let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
+        let rx_buf = &RX_BUFS[0];
+        let buf_cpy = rx_buf.buf.get().read_volatile();
+        let bufsl = &buf_cpy[..len];
         defmt::println!("Data:");
         defmt::println!("{=[u8]:02X}", bufsl);
     }
@@ -330,7 +337,7 @@ impl Gmac {
         // Table 38-2 describes "Receive Buffer Descriptor Entry"
         unsafe {
             // Set the receive buffer addresses in the upper word
-            for (desc, buf) in RX_BUF_DESCS.iter_mut().zip(RX_BUFS.iter()) {
+            for (desc, buf) in RX_BUF_DESCS.iter().zip(RX_BUFS.iter()) {
                 // Take the buffer pointer...
                 let buf_addr_ptr: *mut u8 = buf.buf.get().cast();
                 let buf_wrd_raw: u32 = buf_addr_ptr as u32;
@@ -338,19 +345,16 @@ impl Gmac {
                 defmt::assert_eq!(buf_wrd_raw, buf_wrd_msk, "RX Buf Alignment Wrong!");
 
                 // ...and store it in the buffer descriptor
-                let mut new_desc = RX_BUF_DESC_DEFAULT;
-                new_desc.word_0 = buf_wrd_msk;
-                let desc_ptr: *mut RxBufferDescriptor = desc;
-                desc_ptr.write_volatile(new_desc);
+                desc.set_word_0(buf_wrd_msk);
             }
 
             // This is probably UB and should be fixed...
-            let last: *mut _ = &mut RX_BUF_DESCS[NUM_RX_BUFS - 1];
-            let mut val = last.read_volatile();
+            let last = &RX_BUF_DESCS[NUM_RX_BUFS - 1];
+            let mut word_0 = last.get_word_0();
 
             // Mark as last buffer
-            val.word_0 |= 0x0000_0002;
-            last.write_volatile(val);
+            word_0 |= 0x0000_0002;
+            last.set_word_0(word_0);
         }
 
         // TODO: I *think* I need to set DCFGR.DRBS = (1024 / 64) = 16 = 0x10
@@ -358,7 +362,7 @@ impl Gmac {
 
         self.periph.gmac_rbqb.write(|w| unsafe {
             // Take the buffer descriptor pointer...
-            let desc_ptr: *mut RxBufferDescriptor = RX_BUF_DESCS.as_mut_ptr();
+            let desc_ptr: *const RxBufferDescriptor = RX_BUF_DESCS.as_ptr();
             let desc_wrd_raw: u32 = desc_ptr as u32;
             let desc_wrd_msk: u32 = desc_wrd_raw & 0xFFFF_FFFC;
 
@@ -375,7 +379,7 @@ impl Gmac {
         // Table 38-3 describes "Transmit Buffer Descriptor Entry"
         unsafe {
             // Set the transmit buffer addresses in the upper word
-            for (desc, buf) in TX_BUF_DESCS.iter_mut().zip(TX_BUFS.iter()) {
+            for (desc, buf) in TX_BUF_DESCS.iter().zip(TX_BUFS.iter()) {
                 // Take the buffer pointer...
                 let buf_addr_ptr: *mut u8 = buf.buf.get().cast();
                 let buf_wrd_raw: u32 = buf_addr_ptr as u32;
@@ -383,21 +387,18 @@ impl Gmac {
                 defmt::assert_eq!(buf_wrd_raw, buf_wrd_msk, "TX Buf Alignment Wrong!");
 
                 // ...and store it in the buffer descriptor
-                let mut new_desc = TX_BUF_DESC_DEFAULT;
-                new_desc.word_0 = buf_wrd_msk;
+                desc.set_word_0(buf_wrd_msk);
 
                 // Mark this buffer as "used" by software, so the hardware will
                 // not attempt to use this buffer until later.
-                new_desc.word_1 = 0x8000_0000;
-                let desc_ptr: *mut TxBufferDescriptor = desc;
-                desc_ptr.write_volatile(new_desc);
+                desc.set_word_1(0x8000_0000);
             }
             // Note: No need to mark "last buffer" yet.
         }
 
         self.periph.gmac_tbqb.write(|w| unsafe {
             // Take the buffer descriptor pointer...
-            let desc_ptr: *mut TxBufferDescriptor = TX_BUF_DESCS.as_mut_ptr();
+            let desc_ptr: *const TxBufferDescriptor = TX_BUF_DESCS.as_ptr();
             let desc_wrd_raw: u32 = desc_ptr as u32;
             let desc_wrd_msk: u32 = desc_wrd_raw & 0xFFFF_FFFC;
 
@@ -498,16 +499,97 @@ impl Gmac {
 
 #[repr(C, align(8))]
 struct RxBufferDescriptor {
-    // TODO: Bitfields for this!
-    word_0: u32,
-    word_1: u32,
+    words: UnsafeCell<[u32; 2]>,
+}
+
+impl RxBufferDescriptor {
+    fn get_word_0(&self) -> u32 {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                // .add(0)
+                .read_volatile()
+        }
+    }
+
+    fn set_word_0(&self, val: u32) {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                // .add(0)
+                .write_volatile(val)
+        }
+    }
+
+    fn get_word_1(&self) -> u32 {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                .add(1)
+                .read_volatile()
+        }
+    }
+
+    fn set_word_1(&self, val: u32) {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                .add(1)
+                .write_volatile(val)
+        }
+    }
+}
+
+impl TxBufferDescriptor {
+    fn get_word_0(&self) -> u32 {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                // .add(0)
+                .read_volatile()
+        }
+    }
+
+    fn set_word_0(&self, val: u32) {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                // .add(0)
+                .write_volatile(val)
+        }
+    }
+
+    fn get_word_1(&self) -> u32 {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                .add(1)
+                .read_volatile()
+        }
+    }
+
+    fn set_word_1(&self, val: u32) {
+        unsafe {
+            self.words
+                .get()
+                .cast::<u32>()
+                .add(1)
+                .write_volatile(val)
+        }
+    }
 }
 
 #[repr(C, align(8))]
 struct TxBufferDescriptor {
     // TODO: Bitfields for this!
-    word_0: u32,
-    word_1: u32,
+    words: UnsafeCell<[u32; 2]>,
 }
 
 #[repr(C, align(8))]
@@ -522,16 +604,16 @@ struct TxBuffer {
 
 unsafe impl Sync for RxBuffer { }
 unsafe impl Sync for TxBuffer { }
+unsafe impl Sync for RxBufferDescriptor { }
+unsafe impl Sync for TxBufferDescriptor { }
 
 const RX_BUF_DEFAULT: RxBuffer = RxBuffer { buf: UnsafeCell::new([0u8; RX_BUF_SIZE]) };
 const TX_BUF_DEFAULT: TxBuffer = TxBuffer { buf: UnsafeCell::new([0u8; TX_BUF_SIZE]) };
 
 const RX_BUF_DESC_DEFAULT: RxBufferDescriptor = RxBufferDescriptor {
-    word_0: 0x0000_0000,
-    word_1: 0x0000_0000,
+    words: UnsafeCell::new([0u32; 2]),
 };
 
 const TX_BUF_DESC_DEFAULT: TxBufferDescriptor = TxBufferDescriptor {
-    word_0: 0x0000_0000,
-    word_1: 0x0000_0000,
+    words: UnsafeCell::new([0u32; 2]),
 };
