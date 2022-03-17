@@ -19,12 +19,25 @@ static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 pub struct Gmac {
     periph: GMAC,
+    next_tx_idx: usize,
 }
 
 pub struct ReadFrame {
     bufr: NonNull<[u8; RX_BUF_SIZE]>,
     len: usize,
     desc: NonNull<RxBufferDescriptor>,
+}
+
+pub struct WriteFrame {
+    bufr: NonNull<[u8; TX_BUF_SIZE]>,
+    desc: NonNull<TxBufferDescriptor>,
+    was_sent: bool,
+}
+
+impl Drop for WriteFrame {
+    fn drop(&mut self) {
+        defmt::assert!(self.was_sent, "Oops! Tx Packet dropped without sending! We don't handle this!");
+    }
 }
 
 impl Deref for ReadFrame {
@@ -45,6 +58,24 @@ impl DerefMut for ReadFrame {
     }
 }
 
+impl Deref for WriteFrame {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            core::slice::from_raw_parts(self.bufr.as_ptr().cast(), TX_BUF_SIZE)
+        }
+    }
+}
+
+impl DerefMut for WriteFrame {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), TX_BUF_SIZE)
+        }
+    }
+}
+
 impl Drop for ReadFrame {
     fn drop(&mut self) {
         // On drop, we must reset the header to "free" it.
@@ -58,9 +89,41 @@ impl Drop for ReadFrame {
 
         let last_word = if is_last { 0x0000_0002 } else { 0x0000_0000 };
 
+        // defmt::println!("Releasing ReadFrame @ {=u32:08X}", buf_word_msk);
+
         // Note, bit 0 is ALWAYS cleared here, which marks the buffer as ready for
         // re-use by the GMAC
         desc.set_word_0(buf_word_msk | last_word);
+    }
+}
+
+impl WriteFrame {
+    pub fn send(mut self, len: usize) {
+        let desc = unsafe { self.desc.as_ref() };
+        let old_w1 = desc.get_word_1();
+        let wrap_bit = (old_w1 & 0x4000_0000);
+        let len = len.min(TX_BUF_SIZE).min(0x3FFF) as u32;
+
+        let mut new_w1 = 0;
+                                    // Bit 31 is zeroed to mark this as "ready"
+        new_w1 |= wrap_bit;         // Bit 30: Wrap
+                                    // Bits 29:17 are status/reserved bits, okay to clear
+                                    // Bit 16 is zeroed to have CRC calc offloaded
+        new_w1 |= 0x0000_8000;      // Bit 15: Last Buffer in Frame
+                                    // Bit 14 is reserved
+        new_w1 |= len;              // Bits 13:0: Size
+
+        // Store the word to make it active for the
+        desc.set_word_1(new_w1);
+        self.was_sent = true;
+
+        // yolo
+        unsafe {
+            let gmac = &*GMAC::ptr();
+            gmac.gmac_ncr.modify(|_r, w| {
+                w.tstart().set_bit()
+            });
+        }
     }
 }
 
@@ -71,6 +134,7 @@ impl Gmac {
 
         Self {
             periph,
+            next_tx_idx: 0,
         }
     }
 
@@ -92,6 +156,32 @@ impl Gmac {
             } else {
                 None
             }
+        })
+    }
+
+    pub fn alloc_write_frame(&mut self) -> Option<WriteFrame> {
+        let desc = &TX_BUF_DESCS[self.next_tx_idx];
+        let w1 = desc.get_word_1();
+
+        // Is this packet ready to be used by software?
+        let ready = (w1 & 0x8000_0000) != 0;
+        if !ready {
+            return None;
+        }
+
+        // Yes, it is. Clear out old status registers, but leave the used (and wrap) bit set.
+        // Also update the "next index".
+        let wrap_bit = (w1 & 0x4000_0000);
+        desc.set_word_1(0x8000_0000 | wrap_bit);
+
+        let cur_idx = self.next_tx_idx;
+
+        self.next_tx_idx = (cur_idx + 1) % NUM_TX_BUFS;
+
+        Some(WriteFrame {
+            bufr: NonNull::new(TX_BUFS[cur_idx].buf.get().cast())?,
+            desc: NonNull::new(TX_BUF_DESCS[cur_idx].words.get().cast())?,
+            was_sent: false,
         })
     }
 
