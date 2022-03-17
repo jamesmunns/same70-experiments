@@ -1,4 +1,4 @@
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell, ptr::NonNull, ops::{Deref, DerefMut}};
 
 use atsamx7x_hal::target_device::GMAC;
 use groundhog::RollingTimer;
@@ -19,8 +19,49 @@ static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 pub struct Gmac {
     periph: GMAC,
-    rd_idx: usize,
-    wr_idx: usize,
+}
+
+pub struct ReadFrame {
+    bufr: NonNull<[u8; RX_BUF_SIZE]>,
+    len: usize,
+    desc: NonNull<RxBufferDescriptor>,
+}
+
+impl Deref for ReadFrame {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            core::slice::from_raw_parts(self.bufr.as_ptr().cast(), self.len)
+        }
+    }
+}
+
+impl DerefMut for ReadFrame {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), self.len)
+        }
+    }
+}
+
+impl Drop for ReadFrame {
+    fn drop(&mut self) {
+        // On drop, we must reset the header to "free" it.
+        let desc = unsafe { self.desc.as_ref() };
+        // Get w0 to figure out if this is the "last" item
+        // TODO: Just check against buffer address?
+        let is_last = (desc.get_word_0() & 0x0000_0002) != 0;
+        let buf_addr = self.bufr.as_ptr();
+        let buf_word = buf_addr as u32;
+        let buf_word_msk = buf_word & 0xFFFF_FFFC;
+
+        let last_word = if is_last { 0x0000_0002 } else { 0x0000_0000 };
+
+        // Note, bit 0 is ALWAYS cleared here, which marks the buffer as ready for
+        // re-use by the GMAC
+        desc.set_word_0(buf_word_msk | last_word);
+    }
 }
 
 impl Gmac {
@@ -30,34 +71,29 @@ impl Gmac {
 
         Self {
             periph,
-            rd_idx: 0,
-            wr_idx: 0,
         }
     }
 
-    // pub fn read_frame(&mut self) -> Option
+    pub fn read_frame(&mut self) -> Option<ReadFrame> {
+        // Scan through the read frames, and attempt to find one marked as "used"
+        RX_BUF_DESCS.iter().find_map(|desc| {
+            let w0 = desc.get_word_0();
+            let addr = w0 & 0xFFFF_FFFC;
+            let ready = (w0 & 0x0000_0001) != 0;
 
-    pub fn did_it_work(&mut self) -> bool {
-        unsafe {
-            let rx_desc_ptr: *const RxBufferDescriptor = RX_BUF_DESCS.as_ptr();
-            let desc = rx_desc_ptr.read_volatile();
-            ((*desc.words.get())[0] & 0x0000_0001) != 0
-        }
+            if ready && (addr != 0) {
+                // Erase address, but leave 'ready' and potentially 'last' bit set.
+                desc.set_word_0(w0 & 0x0000_0003);
+                let len = (desc.get_word_1() & 0x0000_0FFF) as usize;
+
+                let desc_addr = NonNull::new(desc.words.get().cast())?;
+                let buf_addr = NonNull::new(addr as *const [u8; RX_BUF_SIZE] as *mut [u8; RX_BUF_SIZE])?;
+                Some(ReadFrame { bufr: buf_addr, len, desc: desc_addr })
+            } else {
+                None
+            }
+        })
     }
-
-    // pub fn mac_preinit(&mut self) {
-        // DRV_MIIM_Setup:
-        //     _DRV_MIIM_ETH_ENABLE
-        //         noop
-        //     _DRV_MIIM_MII_RELEASE_RESET
-        //         noop
-        //     _DRV_MIIM_SMIClockSet
-        //         This is already handled in `init` by `w.clk().mck_64();` in NCFGR
-        //     _DRV_MIIM_SETUP_PREAMBLE
-        //         noop
-        //     _DRV_MIIM_SCAN_INCREMENT
-        //         noop
-    // }
 
     fn miim_mgmt_port_enable(&mut self) {
         self.periph.gmac_ncr.modify(|_r, w| {
@@ -153,25 +189,25 @@ impl Gmac {
         self.miim_mgmt_port_disable();
     }
 
-    pub unsafe fn danger_read(&mut self) {
-        let desc = &RX_BUF_DESCS[0];
+    // pub unsafe fn danger_read(&mut self) {
+    //     let desc = &RX_BUF_DESCS[0];
 
-        let word_0 = desc.get_word_0();
-        let word_1 = desc.get_word_1();
+    //     let word_0 = desc.get_word_0();
+    //     let word_1 = desc.get_word_1();
 
-        defmt::println!("RXBD0: {=u32:08X}", word_0);
-        defmt::println!("RXBD1: {=u32:08X}", word_1);
+    //     defmt::println!("RXBD0: {=u32:08X}", word_0);
+    //     defmt::println!("RXBD1: {=u32:08X}", word_1);
 
-        let len = (word_1 & 0x0000_0FFF) as usize;
-        defmt::println!("Len: {=usize}", len);
+    //     let len = (word_1 & 0x0000_0FFF) as usize;
+    //     defmt::println!("Len: {=usize}", len);
 
-        // let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
-        let rx_buf = &RX_BUFS[0];
-        let buf_cpy = rx_buf.buf.get().read_volatile();
-        let bufsl = &buf_cpy[..len];
-        defmt::println!("Data:");
-        defmt::println!("{=[u8]:02X}", bufsl);
-    }
+    //     // let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
+    //     let rx_buf = &RX_BUFS[0];
+    //     let buf_cpy = rx_buf.buf.get().read_volatile();
+    //     let bufsl = &buf_cpy[..len];
+    //     defmt::println!("Data:");
+    //     defmt::println!("{=[u8]:02X}", bufsl);
+    // }
 
     pub fn init(&mut self) {
         // Based on DRV_PIC32CGMAC_LibInit
