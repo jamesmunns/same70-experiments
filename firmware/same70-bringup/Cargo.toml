@@ -20,6 +20,18 @@ defmt-rtt = "0.3.0"
 panic-probe = { version = "0.3.0", features = ["print-defmt"] }
 groundhog = "0.2.5"
 
+[dependencies.smoltcp]
+version = "0.8"
+default-features = false
+features = [
+    "proto-ipv4",
+    "medium-ethernet",
+    "socket-tcp",
+    "socket-udp",
+    "socket-raw",
+    "defmt",
+]
+
 [dependencies.atsamx7x-hal]
 path = "../../vendor/atsamx7x-hal"
 features = ["same70q21b-rt"]
