@@ -1,7 +1,8 @@
-use core::{cell::UnsafeCell, ptr::NonNull, ops::{Deref, DerefMut}};
+use core::{cell::UnsafeCell, ptr::NonNull, ops::{Deref, DerefMut}, marker::PhantomData};
 
 use atsamx7x_hal::target_device::{GMAC, generic::Reg, gmac::{gmac_idrpq::GMAC_IDRPQ_SPEC, gmac_isrpq::GMAC_ISRPQ_SPEC}};
 use groundhog::RollingTimer;
+use smoltcp::phy::{Device, RxToken, TxToken, DeviceCapabilities, Medium, ChecksumCapabilities, Checksum};
 
 use crate::GlobalRollingTimer;
 
@@ -18,6 +19,78 @@ static TX_BUF_DESCS: [TxBufferDescriptor; NUM_TX_BUFS] = [TX_BUF_DESC_DEFAULT; N
 static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 static UNUSED_TX_BUF_DESC: TxBufferDescriptor = TX_BUF_DESC_DEFAULT;
+
+
+pub struct GmacRxToken<'a> {
+    rf: ReadFrame,
+    _plt: PhantomData<&'a ()>,
+}
+pub struct GmacTxToken<'a> {
+    gmac: &'a mut Gmac,
+}
+
+impl<'a> RxToken for GmacRxToken<'a> {
+    fn consume<R, F>(mut self, timestamp: smoltcp::time::Instant, f: F) -> smoltcp::Result<R>
+    where
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
+    {
+        defmt::println!("RxCons: {=u32:08X}", timestamp.total_millis() as u32);
+        f(self.rf.deref_mut())
+    }
+}
+
+impl<'a> TxToken for GmacTxToken<'a> {
+    fn consume<R, F>(self, timestamp: smoltcp::time::Instant, len: usize, f: F) -> smoltcp::Result<R>
+    where
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
+    {
+        defmt::println!("TxCons: {=u32:08X}", timestamp.total_millis() as u32);
+        let mut tf = self.gmac.alloc_write_frame().unwrap();
+        let res = f(&mut tf[..len]);
+        tf.send(len);
+        res
+    }
+}
+
+impl<'a> Device<'a> for Gmac {
+    type RxToken = GmacRxToken<'a>;
+    type TxToken = GmacTxToken<'a>;
+
+    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+        let rxf = self.read_frame()?;
+        Some((
+            GmacRxToken {
+                rf: rxf,
+                _plt: PhantomData,
+            },
+            GmacTxToken {
+                gmac: self,
+            }
+        ))
+    }
+
+    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+        Some(GmacTxToken {
+            gmac: self
+        })
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut capa = DeviceCapabilities::default();
+        capa.medium = Medium::Ethernet;
+        capa.max_transmission_unit = 1024; // Is this too big?
+        capa.max_burst_size = None;
+
+        let mut cksm = ChecksumCapabilities::ignored();
+        cksm.ipv4 = Checksum::None;
+        cksm.tcp = Checksum::None;
+        cksm.udp = Checksum::None;
+        cksm.icmpv4 = Checksum::None;
+
+        capa.checksum = cksm;
+        capa
+    }
+}
 
 pub struct Gmac {
     periph: GMAC,
@@ -38,7 +111,10 @@ pub struct WriteFrame {
 
 impl Drop for WriteFrame {
     fn drop(&mut self) {
-        defmt::assert!(self.was_sent, "Oops! Tx Packet dropped without sending! We don't handle this!");
+        if !self.was_sent {
+            defmt::println!("Dropping unsent frame!");
+            unsafe { self.dropper(0) }
+        }
     }
 }
 
@@ -100,8 +176,8 @@ impl Drop for ReadFrame {
 }
 
 impl WriteFrame {
-    pub fn send(mut self, len: usize) {
-        let desc = unsafe { self.desc.as_ref() };
+    unsafe fn dropper(&mut self, len: usize) {
+        let desc = { self.desc.as_ref() };
         let old_w1 = desc.get_word_1();
         let wrap_bit = old_w1 & 0x4000_0000;
         let len = len.min(TX_BUF_SIZE).min(0x3FFF) as u32;
@@ -120,12 +196,16 @@ impl WriteFrame {
         self.was_sent = true;
 
         // yolo
-        unsafe {
+        {
             let gmac = &*GMAC::ptr();
             gmac.gmac_ncr.modify(|_r, w| {
                 w.tstart().set_bit()
             });
         }
+    }
+
+    pub fn send(mut self, len: usize) {
+        unsafe { self.dropper(len) };
     }
 }
 
@@ -162,8 +242,8 @@ impl Gmac {
     }
 
     pub fn alloc_write_frame(&mut self) -> Option<WriteFrame> {
-        let tsr = self.periph.gmac_tsr.read().bits();
-        defmt::println!("TSR: {=u32:08x}", tsr);
+        // let tsr = self.periph.gmac_tsr.read().bits();
+        // defmt::println!("TSR: {=u32:08x}", tsr);
 
         let desc = &TX_BUF_DESCS[self.next_tx_idx];
         let w1 = desc.get_word_1();
@@ -176,7 +256,7 @@ impl Gmac {
 
         // Yes, it is. Clear out old status registers, but leave the used (and wrap) bit set.
         // Also update the "next index".
-        let wrap_bit = (w1 & 0x4000_0000);
+        let wrap_bit = w1 & 0x4000_0000;
         desc.set_word_1(0x8000_0000 | wrap_bit);
 
         let cur_idx = self.next_tx_idx;
@@ -283,26 +363,6 @@ impl Gmac {
 
         self.miim_mgmt_port_disable();
     }
-
-    // pub unsafe fn danger_read(&mut self) {
-    //     let desc = &RX_BUF_DESCS[0];
-
-    //     let word_0 = desc.get_word_0();
-    //     let word_1 = desc.get_word_1();
-
-    //     defmt::println!("RXBD0: {=u32:08X}", word_0);
-    //     defmt::println!("RXBD1: {=u32:08X}", word_1);
-
-    //     let len = (word_1 & 0x0000_0FFF) as usize;
-    //     defmt::println!("Len: {=usize}", len);
-
-    //     // let rx_buf_ptr: *const RxBuffer = RX_BUFS.as_ptr();
-    //     let rx_buf = &RX_BUFS[0];
-    //     let buf_cpy = rx_buf.buf.get().read_volatile();
-    //     let bufsl = &buf_cpy[..len];
-    //     defmt::println!("Data:");
-    //     defmt::println!("{=[u8]:02X}", bufsl);
-    // }
 
     pub fn init(&mut self) {
         // Based on DRV_PIC32CGMAC_LibInit
