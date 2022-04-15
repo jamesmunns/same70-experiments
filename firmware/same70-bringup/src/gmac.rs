@@ -35,7 +35,7 @@ impl<'a> RxToken for GmacRxToken<'a> {
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
     {
         // defmt::println!("RxCons: {=u32:08X}", timestamp.total_millis() as u32);
-        defmt::println!("RX: {=[u8]:02X}", &self.rf);
+        defmt::trace!("RX: {=[u8]:02X}", &self.rf);
         f(self.rf.deref_mut())
     }
 }
@@ -48,7 +48,7 @@ impl<'a> TxToken for GmacTxToken<'a> {
         // defmt::println!("TxCons: {=u32:08X}", timestamp.total_millis() as u32);
         let mut tf = self.gmac.alloc_write_frame().unwrap();
         let res = f(&mut tf[..len]);
-        defmt::println!("TX: {=[u8]:02X}", &tf[..len]);
+        defmt::trace!("TX: {=[u8]:02X}", &tf[..len]);
         tf.send(len);
         res
     }
@@ -84,10 +84,10 @@ impl<'a> Device<'a> for Gmac {
         capa.max_burst_size = None;
 
         let mut cksm = ChecksumCapabilities::ignored();
-        cksm.ipv4 = Checksum::Both;
-        cksm.tcp = Checksum::Both;
-        cksm.udp = Checksum::Both;
-        cksm.icmpv4 = Checksum::Both;
+        cksm.ipv4 = Checksum::None;
+        cksm.tcp = Checksum::None;
+        cksm.udp = Checksum::None;
+        cksm.icmpv4 = Checksum::None;
 
         capa.checksum = cksm;
         capa
@@ -97,6 +97,9 @@ impl<'a> Device<'a> for Gmac {
 pub struct Gmac {
     periph: GMAC,
     next_tx_idx: usize,
+    last_txgo: bool,
+    last_bna: bool,
+    last_stat_poll: u32,
 }
 
 pub struct ReadFrame {
@@ -193,7 +196,7 @@ impl WriteFrame {
                                     // Bit 14 is reserved
         new_w1 |= len;              // Bits 13:0: Size
 
-        // Store the word to make it active for the
+        // Store the word to make it active for the transmit hardware to process.
         desc.set_word_1(new_w1);
         self.was_sent = true;
 
@@ -215,10 +218,100 @@ impl Gmac {
     // TODO: Mark safe when possible.
     pub unsafe fn new(periph: GMAC) -> Self {
         defmt::println!("WARNING: Don't forget! We rely on configuration elsewhere for pins and stuff.");
-
+        let timer = GlobalRollingTimer::default();
         Self {
             periph,
             next_tx_idx: 0,
+            last_txgo: false,
+            last_bna: false,
+            last_stat_poll: timer.get_ticks(),
+        }
+    }
+
+    pub fn query(&mut self) {
+        // Query TSR
+        self.periph.gmac_tsr.modify(|r, w| {
+            if r.hresp().bit_is_set() {
+                defmt::error!("[TSR]: HRESP Not OK");
+                w.hresp().set_bit();
+            }
+
+            if r.txcomp().bit_is_set() {
+                defmt::info!("[TSR]: Frame Transmit Complete");
+                w.txcomp().set_bit();
+            }
+
+            if r.tfc().bit_is_set() {
+                defmt::error!("[TSR]: Transmit Frame Corruption Due to AHB Error");
+                w.tfc().set_bit();
+            }
+
+            let txgo = r.txgo().bit_is_set();
+            if txgo != self.last_txgo {
+                self.last_txgo = txgo;
+                defmt::info!("[TSR]: TXGO changed to {=bool}", txgo);
+            }
+
+            if r.rle().bit_is_set() {
+                defmt::warn!("[TSR]: Retry Limit Exceeded");
+                w.rle().set_bit();
+            }
+
+            if r.col().bit_is_set() {
+                defmt::warn!("[TSR]: Collision Occurred");
+                w.col().set_bit();
+            }
+
+            if r.ubr().bit_is_set() {
+                defmt::warn!("[TSR]: Used Bit Read");
+                w.ubr().set_bit();
+            }
+
+            w
+        });
+
+        // Query RSR
+        self.periph.gmac_rsr.modify(|r, w| {
+            if r.hno().bit_is_set() {
+                defmt::error!("[RSR]: HRESP Not OK");
+                w.hno().set_bit();
+            }
+
+            if r.rxovr().bit_is_set() {
+                defmt::error!("[RSR]: Receive Overrun");
+                w.rxovr().set_bit();
+            }
+
+            if r.rec().bit_is_set() {
+                defmt::info!("[RSR]: Frame Received");
+                w.rec().set_bit();
+            }
+
+            let bna = r.bna().bit_is_set();
+            if bna != self.last_bna {
+                self.last_bna = bna;
+                defmt::info!("[RSR]: BNA changed to {=bool}", bna);
+            }
+
+            w
+        });
+
+        // Query Stats
+        let timer = GlobalRollingTimer::default();
+        if timer.seconds_since(self.last_stat_poll) >= 10 {
+            self.last_stat_poll = timer.get_ticks();
+            defmt::info!("Frames Transmitted: {=u32}", self.periph.gmac_ft.read().bits());
+            defmt::info!("Frames Received: {=u32}", self.periph.gmac_fr.read().bits());
+
+            defmt::info!("Transmit Underruns: {=u32}", self.periph.gmac_tur.read().bits());
+            defmt::info!("Single Collision Frames: {=u32}", self.periph.gmac_scf.read().bits());
+            defmt::info!("Frames Check Seq Errors: {=u32}", self.periph.gmac_fcse.read().bits());
+            defmt::info!("Frame Length Field Errors: {=u32}", self.periph.gmac_lffe.read().bits());
+
+            defmt::info!("IP Header Checksum Errors: {=u32}", self.periph.gmac_ihce.read().bits());
+            defmt::info!("TCP Checksum Errors: {=u32}", self.periph.gmac_tce.read().bits());
+            defmt::info!("UDP Checksum Errors: {=u32}", self.periph.gmac_uce.read().bits());
+
         }
     }
 
@@ -478,19 +571,32 @@ impl Gmac {
         //                         Chandler  AZ  85224
         //                         US
 
+        // GMAC_REGS->GMAC_SA[0].GMAC_SAB = (pMacAddr[3] << 24)
+        //                             | (pMacAddr[2] << 16)
+        //                             | (pMacAddr[1] <<  8)
+        //                             | (pMacAddr[0]);
+
+        // GMAC_REGS->GMAC_SA[0].GMAC_SAT = (pMacAddr[5] <<  8)
+        //                             | (pMacAddr[4]) ;
+
+        //  0  1  2  3  4  5
+        // 04:91:62:01:02:03
+
         self.periph.gmac_sa1.gmac_sab.write(|w| unsafe {
-            w.addr().bits(u32::from_le_bytes([
-                0x03, // LSB
-                0x02, //
-                0x01, //
-                0x62, // MSB
-            ]))
+            let bottom: u32 = {
+                (0x01 << 24) |
+                (0x62 << 16) |
+                (0x91 <<  8) |
+                0x04
+            };
+            w.addr().bits(bottom)
         });
         self.periph.gmac_sa1.gmac_sat.write(|w| unsafe {
-            w.addr().bits(u16::from_le_bytes([
-                0x91, // LSB
-                0x04, // MSB
-            ]))
+            let top: u16 = {
+                (0x03 << 8) |
+                0x02
+            };
+            w.addr().bits(top)
         });
 
         // // MII mode config

@@ -39,8 +39,8 @@ mod unit_tests {
     }
 }
 
-defmt::timestamp!("{=u32:010}", {
-    GlobalRollingTimer::default().get_ticks()
+defmt::timestamp!("{=f32}", {
+    (GlobalRollingTimer::default().get_ticks() as f32) / (32768.0 / 4.0)
 });
 
 /// Perform fixed, application-specific setup.

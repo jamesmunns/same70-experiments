@@ -10,7 +10,7 @@ use same70_bringup::{self as _, fixed_setup, hal, gmac::Gmac}; // global logger 
 use same70_bringup::GlobalRollingTimer;
 use smoltcp::iface::{Neighbor, InterfaceBuilder, SocketStorage, NeighborCache};
 use smoltcp::phy::{Device, RxToken, TxToken};
-use smoltcp::socket::{TcpSocketBuffer, TcpSocket};
+use smoltcp::socket::{TcpSocketBuffer, TcpSocket, TcpState};
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpCidr, IpAddress, EthernetAddress, HardwareAddress};
 
@@ -41,7 +41,10 @@ fn main() -> ! {
 
     defmt::println!("Polling...");
 
-    let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 1] = [IpCidr::new(IpAddress::v4(192, 168, 240, 1), 24)]).unwrap();
+    let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 2] = [
+        IpCidr::new(IpAddress::v4(192, 168, 240, 1), 24),
+        IpCidr::new(IpAddress::v4(192, 168, 240, 8), 24),
+    ]).unwrap();
     let neighbor_cache: &'static mut _ = singleton!(: [Option<(IpAddress, Neighbor)>; 8] = [None; 8]).unwrap();
     let sockets: &'static mut _ = singleton!(: [SocketStorage<'static>; 8] = [SocketStorage::EMPTY; 8]).unwrap();
 
@@ -63,7 +66,14 @@ fn main() -> ! {
     let start = timer.get_ticks();
     let mut did_listen = false;
 
+    let mut buf = [0u8; 1024];
+
+    let mut last_state = smoltcp::socket::TcpState::Closed;
+
     loop {
+        // Log any relevant events
+        iface.device_mut().query();
+
         // TODO: This will roll over after 145 hours!
         match iface.poll(Instant::from_micros(timer.micros_since(start))) {
             Ok(_) => {},
@@ -73,6 +83,13 @@ fn main() -> ! {
         }
 
         let socket = iface.get_socket::<TcpSocket>(server_handle);
+
+        let state = socket.state();
+        if state != last_state {
+            defmt::println!("STATE CHANGE: {=?} => {=?}", last_state, state);
+            last_state = state;
+        }
+
         if !socket.is_active() && !socket.is_listening() {
             if !did_listen {
                 defmt::println!("Listening...");
@@ -81,13 +98,25 @@ fn main() -> ! {
             }
         }
 
+        let mut to_send = None;
         if socket.can_recv() {
             socket.recv(|buffer| {
                 defmt::println!("RECV!");
                 defmt::println!("    len: {=usize}", buffer.len());
                 defmt::println!("    dat: {=[u8]}", buffer);
+                buf[..buffer.len()].copy_from_slice(buffer);
+                to_send = Some(&buf[..buffer.len()]);
                 (buffer.len(), ())
             }).unwrap();
+        }
+
+        if let Some(tx) = to_send {
+            socket.send_slice(tx).unwrap();
+        }
+
+        if let TcpState::CloseWait = state {
+            socket.close();
+            did_listen = false;
         }
         // let rf = match gmac.read_frame() {
         //     Some(f) => {
