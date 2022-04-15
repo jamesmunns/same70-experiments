@@ -34,7 +34,8 @@ impl<'a> RxToken for GmacRxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
     {
-        defmt::println!("RxCons: {=u32:08X}", timestamp.total_millis() as u32);
+        // defmt::println!("RxCons: {=u32:08X}", timestamp.total_millis() as u32);
+        defmt::println!("RX: {=[u8]:02X}", &self.rf);
         f(self.rf.deref_mut())
     }
 }
@@ -44,9 +45,10 @@ impl<'a> TxToken for GmacTxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
     {
-        defmt::println!("TxCons: {=u32:08X}", timestamp.total_millis() as u32);
+        // defmt::println!("TxCons: {=u32:08X}", timestamp.total_millis() as u32);
         let mut tf = self.gmac.alloc_write_frame().unwrap();
         let res = f(&mut tf[..len]);
+        defmt::println!("TX: {=[u8]:02X}", &tf[..len]);
         tf.send(len);
         res
     }
@@ -82,10 +84,10 @@ impl<'a> Device<'a> for Gmac {
         capa.max_burst_size = None;
 
         let mut cksm = ChecksumCapabilities::ignored();
-        cksm.ipv4 = Checksum::None;
-        cksm.tcp = Checksum::None;
-        cksm.udp = Checksum::None;
-        cksm.icmpv4 = Checksum::None;
+        cksm.ipv4 = Checksum::Both;
+        cksm.tcp = Checksum::Both;
+        cksm.udp = Checksum::Both;
+        cksm.icmpv4 = Checksum::Both;
 
         capa.checksum = cksm;
         capa
@@ -458,7 +460,7 @@ impl Gmac {
             // 4 == mck / 64
             w.clk().mck_64();
             w.pen().set_bit();
-            w.rfcs().set_bit();
+            w.rfcs().clear_bit();
             // Note: Always enabling checksum offloading for now
             w.rxcoen().set_bit();
             w
