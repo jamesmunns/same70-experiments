@@ -8,11 +8,11 @@ use cortex_m::singleton;
 use groundhog::RollingTimer;
 use same70_bringup::{self as _, fixed_setup, hal, gmac::Gmac}; // global logger + panicking-behavior + memory layout
 use same70_bringup::GlobalRollingTimer;
-use smoltcp::iface::{Neighbor, InterfaceBuilder, SocketStorage, NeighborCache};
+use smoltcp::iface::{Neighbor, InterfaceBuilder, SocketStorage, NeighborCache, Routes, Route, Interface};
 use smoltcp::phy::{Device, RxToken, TxToken};
-use smoltcp::socket::{TcpSocketBuffer, TcpSocket, TcpState};
+use smoltcp::socket::{TcpSocketBuffer, TcpSocket, TcpState, Dhcpv4Event, Dhcpv4Socket};
 use smoltcp::time::Instant;
-use smoltcp::wire::{IpCidr, IpAddress, EthernetAddress, HardwareAddress};
+use smoltcp::wire::{IpCidr, IpAddress, EthernetAddress, HardwareAddress, Ipv4Address, Ipv4Cidr};
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -41,16 +41,18 @@ fn main() -> ! {
 
     defmt::println!("Polling...");
 
-    let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 2] = [
-        IpCidr::new(IpAddress::v4(192, 168, 240, 1), 24),
-        IpCidr::new(IpAddress::v4(192, 168, 240, 8), 24),
+    let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 1] = [
+        IpCidr::new(Ipv4Address::UNSPECIFIED.into(), 24),
     ]).unwrap();
     let neighbor_cache: &'static mut _ = singleton!(: [Option<(IpAddress, Neighbor)>; 8] = [None; 8]).unwrap();
     let sockets: &'static mut _ = singleton!(: [SocketStorage<'static>; 8] = [SocketStorage::EMPTY; 8]).unwrap();
+    let routes_storage: &'static mut _ = singleton!(: [Option<(IpCidr, Route)>; 1] = [None; 1]).unwrap();
+    let routes = Routes::new(routes_storage.as_mut_slice());
 
     let mut iface = InterfaceBuilder::new(gmac, sockets.as_mut_slice())
         .hardware_addr(EthernetAddress::from_bytes(&[0x04, 0x91, 0x62, 0x01, 0x02, 0x03]).into())
         .neighbor_cache(NeighborCache::new(neighbor_cache.as_mut_slice()))
+        .routes(routes)
         .ip_addrs(ip_addrs.as_mut_slice())
         .finalize();
 
@@ -62,7 +64,9 @@ fn main() -> ! {
         TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer)
     };
 
+    let dhcp_socket = smoltcp::socket::Dhcpv4Socket::new();
     let server_handle = iface.add_socket(server_socket);
+    let dhcp_handle = iface.add_socket(dhcp_socket);
     let start = timer.get_ticks();
     let mut did_listen = false;
 
@@ -80,6 +84,36 @@ fn main() -> ! {
             Err(e) => {
                 defmt::println!("Error: {:?}", e);
             },
+        }
+
+        let event = iface.get_socket::<Dhcpv4Socket>(dhcp_handle).poll();
+        match event {
+            None => {}
+            Some(Dhcpv4Event::Configured(config)) => {
+                defmt::println!("DHCP config acquired!");
+
+                defmt::println!("IP address:      {}", config.address);
+                set_ipv4_addr(&mut iface, config.address);
+
+                if let Some(router) = config.router {
+                    defmt::println!("Default gateway: {}", router);
+                    iface.routes_mut().add_default_ipv4_route(router).unwrap();
+                } else {
+                    defmt::println!("Default gateway: None");
+                    iface.routes_mut().remove_default_ipv4_route();
+                }
+
+                for (i, s) in config.dns_servers.iter().enumerate() {
+                    if let Some(s) = s {
+                        defmt::println!("DNS server {}:    {}", i, s);
+                    }
+                }
+            }
+            Some(Dhcpv4Event::Deconfigured) => {
+                defmt::println!("DHCP lost config!");
+                set_ipv4_addr(&mut iface, Ipv4Cidr::new(Ipv4Address::UNSPECIFIED, 0));
+                iface.routes_mut().remove_default_ipv4_route();
+            }
         }
 
         let socket = iface.get_socket::<TcpSocket>(server_handle);
@@ -141,4 +175,14 @@ fn main() -> ! {
 
         // wf.send(rf.len());
     }
+}
+
+fn set_ipv4_addr<DeviceT>(iface: &mut Interface<'_, DeviceT>, cidr: Ipv4Cidr)
+where
+    DeviceT: for<'d> Device<'d>,
+{
+    iface.update_ip_addrs(|addrs| {
+        let dest = addrs.iter_mut().next().unwrap();
+        *dest = IpCidr::Ipv4(cidr);
+    });
 }

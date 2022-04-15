@@ -25,10 +25,12 @@ version = "0.8"
 default-features = false
 features = [
     "proto-ipv4",
+    "proto-dhcpv4",
     "medium-ethernet",
     "socket-tcp",
     "socket-udp",
     "socket-raw",
+    "socket-dhcpv4",
     "defmt",
 ]
 
