@@ -10,6 +10,7 @@ pub use atsamx7x_hal as hal; // memory layout
 use hal::target_device::{Peripherals, WDT, RTT};
 use panic_probe as _;
 pub mod gmac;
+pub mod spi;
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
 // this prevents the panic message being printed *twice* when `defmt::panic` is invoked
@@ -47,8 +48,35 @@ defmt::timestamp!("{=f32}", {
 pub fn fixed_setup(board: &Peripherals) {
     clock_setup(board);
 
-    board.PMC.pmc_pcer0.write(|w| unsafe { w.bits(0x0087_5C00) }); // ??
-    board.PMC.pmc_pcer1.write(|w| unsafe { w.bits(0x0400_0080) }); // ??
+    // Refer to Table 14-1 "Peripheral Identifiers" (page 66)
+    // for decoding of PIDs used below.
+    board.PMC.pmc_pcer0.write(|w| unsafe {
+        let mut pcer0 = 0u32;
+
+        pcer0 |= 1 << 23; // PID23 - TC0_CHANNEL0
+                          // NOTE: Not actually used!
+        pcer0 |= 1 << 21; // PID21 - SPI0
+        pcer0 |= 1 << 18; // PID18 - HSMCI
+                          // NOTE: Not actually used!
+        pcer0 |= 1 << 17; // PID17 - PIOE
+        pcer0 |= 1 << 16; // PID16 - PIOD
+        pcer0 |= 1 << 14; // PID14 - USART1
+                          // NOTE: Not actually used!
+        pcer0 |= 1 << 12; // PID12 - PIOC
+        pcer0 |= 1 << 11; // PID11 - PIOB
+        pcer0 |= 1 << 10; // PID10 - PIOA
+
+        w.bits(pcer0)
+    });
+    board.PMC.pmc_pcer1.write(|w| unsafe {
+        let mut pcer1 = 0u32;
+
+        pcer1 |= 1 << 26; // PID58 - XDMAC
+                          // NOTE: Not sure if I actually use this?
+        pcer1 |= 1 <<  7; // PID39 - GMAC
+
+        w.bits(pcer1)
+    });
 
     disable_watchdog(board);
     enable_pio_a(board);
@@ -233,13 +261,42 @@ pub fn enable_pio_d(board: &Peripherals) {
         w
     });
 
+    let mut periph_pins = 0u32;
+
+    // Ethernet pins
+    periph_pins |= 1 << 0; // PD00 - GTXCK
+    periph_pins |= 1 << 1; // PD01 - GTXEN
+    periph_pins |= 1 << 2; // PD02 - GTX0
+    periph_pins |= 1 << 3; // PD03 - GTX1
+    periph_pins |= 1 << 4; // PD04 - GRXDV
+    periph_pins |= 1 << 5; // PD05 - GRX0
+    periph_pins |= 1 << 6; // PD06 - GRX1
+    periph_pins |= 1 << 7; // PD07 - GRXER
+    periph_pins |= 1 << 8; // PD08 - GMDC
+    periph_pins |= 1 << 9; // PD09 - GMDIO
+
+    // SPI0 pins
+    periph_pins |= 1 << 20; // PD20 - SPI0_MISO  // ALT B
+    periph_pins |= 1 << 21; // PD21 - SPI0_MOSI  // ALT B
+    periph_pins |= 1 << 22; // PD22 - SPI0_SPCK  // ALT B
+    periph_pins |= 1 << 25; // PD25 - SPI0_NPCS1 // ALT B
+
+    // ALT B means nothing in the top reg, ones in the low reg
+    board.PIOD.pio_abcdsr[0].write(|w| {
+        w.p20().set_bit();
+        w.p21().set_bit();
+        w.p22().set_bit();
+        w.p25().set_bit();
+        w
+    });
+
     // /************************ PIO D Initialization ************************/
     // /* PORTD PIO Disable and Peripheral Enable*/
     // ((pio_registers_t*)PIO_PORT_D)->PIO_PDR = 0x3ff;
-    board.PIOD.pio_pdr.write(|w| unsafe { w.bits(0x0000_03FF) });
+    board.PIOD.pio_pdr.write(|w| unsafe { w.bits(periph_pins) });
 
     // ((pio_registers_t*)PIO_PORT_D)->PIO_PER = ~0x3ff;
-    board.PIOD.pio_per.write(|w| unsafe { w.bits(!0x0000_03FF) });
+    board.PIOD.pio_per.write(|w| unsafe { w.bits(!periph_pins) });
 
     // ((pio_registers_t*)PIO_PORT_D)->PIO_MDDR = 0xFFFFFFFF;
     board.PIOD.pio_mddr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
