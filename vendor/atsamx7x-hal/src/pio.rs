@@ -349,7 +349,7 @@ where
 
 mod sealed {
     use crate::pmc::PeripheralIdentifier;
-    use atsamx7x_hal::target_device::{pioa, PIOA, PIOB, PIOC, PIOD, PIOE};
+    use crate::target_device::{pioa, PIOA, PIOB, PIOC, PIOD, PIOE};
     use core::ops::Deref;
 
     pub trait Port: Deref<Target = pioa::RegisterBlock> {

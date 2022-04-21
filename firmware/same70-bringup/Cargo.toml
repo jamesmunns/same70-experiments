@@ -35,6 +35,7 @@ features = [
 ]
 
 [dependencies.atsamx7x-hal]
+package = "ovl-atsamx7x-hal"
 path = "../../vendor/atsamx7x-hal"
 features = ["same70q21b-rt"]
 

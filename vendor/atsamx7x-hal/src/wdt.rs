@@ -1,4 +1,4 @@
-use atsamx7x_hal::target_device::WDT;
+use crate::target_device::WDT;
 
 pub struct Wdt {
     periph: WDT,

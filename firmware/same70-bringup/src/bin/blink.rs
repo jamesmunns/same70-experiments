@@ -3,23 +3,22 @@
 
 use cortex_m::asm::delay;
 use groundhog::RollingTimer;
-use same70_bringup::pio::Level;
-use same70_bringup::GlobalRollingTimer;
-use same70_bringup::{
+use same70_bringup::hal::{
     self as _,
     efc::Efc,
-    hal,
-    pio::Pio,
+    pio::{Level, Pio},
     pmc::{
         ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler, Pmc,
     },
+    target_device::Peripherals,
     wdt::Wdt,
+    GlobalRollingTimer,
 }; // global logger + panicking-behavior + memory layout
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
     // Obtain PAC-level access
-    let board = hal::target_device::Peripherals::take().unwrap();
+    let board = Peripherals::take().unwrap();
 
     let mut efc = Efc::new(board.EFC);
     let mut pmc = Pmc::new(board.PMC);

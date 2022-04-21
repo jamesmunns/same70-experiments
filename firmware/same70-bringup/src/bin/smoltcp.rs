@@ -3,15 +3,15 @@
 
 use cortex_m::singleton;
 use groundhog::RollingTimer;
-use same70_bringup::{
+use same70_bringup::hal::{
     efc::Efc,
     gmac::{Gmac, GmacPins},
-    hal::target_device::Peripherals,
     pio::Pio,
     pmc::{
         ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
         PeripheralIdentifier, Pmc,
     },
+    target_device::Peripherals,
     wdt::Wdt,
     GlobalRollingTimer,
 }; // global logger + panicking-behavior + memory layout

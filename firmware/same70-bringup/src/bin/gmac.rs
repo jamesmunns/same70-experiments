@@ -3,21 +3,24 @@
 
 use core::ops::Deref;
 
-use same70_bringup::efc::Efc;
-use same70_bringup::gmac::GmacPins;
-use same70_bringup::pio::Pio;
-use same70_bringup::pmc::{
-    ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
-    PeripheralIdentifier, Pmc,
+use same70_bringup::hal::{
+    efc::Efc,
+    gmac::{GmacPins, Gmac},
+    pio::Pio,
+    pmc::{
+        ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
+        PeripheralIdentifier, Pmc,
+    },
+    target_device::Peripherals,
+    wdt::Wdt,
+    GlobalRollingTimer,
+    self as _, // global logger + panicking-behavior + memory layout
 };
-use same70_bringup::wdt::Wdt;
-use same70_bringup::GlobalRollingTimer;
-use same70_bringup::{self as _, gmac::Gmac, hal}; // global logger + panicking-behavior + memory layout
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
     // Obtain PAC-level access
-    let board = hal::target_device::Peripherals::take().unwrap();
+    let board = Peripherals::take().unwrap();
 
     let mut efc = Efc::new(board.EFC);
     let mut pmc = Pmc::new(board.PMC);

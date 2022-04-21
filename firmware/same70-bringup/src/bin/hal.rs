@@ -2,18 +2,18 @@
 #![no_std]
 
 use groundhog::RollingTimer;
-use same70_bringup::gmac::{Gmac, GmacPins};
-use same70_bringup::wdt::Wdt;
-use same70_bringup::GlobalRollingTimer;
-use same70_bringup::{
+use same70_bringup::hal::{
     self as _,
     efc::Efc,
-    hal,
+    gmac::{Gmac, GmacPins},
     pio::Pio,
     pmc::{
         ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
         PeripheralIdentifier, Pmc,
     },
+    target_device::Peripherals,
+    wdt::Wdt,
+    GlobalRollingTimer,
 }; // global logger + panicking-behavior + memory layout
 
 #[cortex_m_rt::entry]
@@ -21,7 +21,7 @@ fn main() -> ! {
     defmt::println!("Blink!");
 
     // Obtain PAC-level access
-    let board = hal::target_device::Peripherals::take().unwrap();
+    let board = Peripherals::take().unwrap();
 
     let mut efc = Efc::new(board.EFC);
     let mut pmc = Pmc::new(board.PMC);

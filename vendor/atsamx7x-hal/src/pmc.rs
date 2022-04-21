@@ -1,9 +1,9 @@
 use crate::efc::Efc;
 use crate::efc::FlashWaitStates;
-use atsamx7x_hal::target_device::PMC;
+use crate::target_device::PMC;
 
-pub use atsamx7x_hal::target_device::pmc::pmc_mckr::MDIV_A as MckDivider;
-pub use atsamx7x_hal::target_device::pmc::pmc_mckr::PRES_A as MckPrescaler;
+pub use crate::target_device::pmc::pmc_mckr::MDIV_A as MckDivider;
+pub use crate::target_device::pmc::pmc_mckr::PRES_A as MckPrescaler;
 
 pub struct Pmc {
     periph: PMC,

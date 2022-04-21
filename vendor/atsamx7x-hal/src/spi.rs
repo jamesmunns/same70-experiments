@@ -37,7 +37,7 @@ board.PIOD.pio_per.write(|w| unsafe { w.bits(!0x0000_03FF) });
 
 use core::num::NonZeroU8;
 
-use atsamx7x_hal::target_device::{PIOD, SPI0};
+use crate::target_device::{PIOD, SPI0};
 
 use crate::{
     pio::{PeriphB, Pin},

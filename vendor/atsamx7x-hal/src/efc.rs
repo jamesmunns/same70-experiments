@@ -1,5 +1,4 @@
-use atsamx7x_hal::target_device::EFC;
-
+use crate::target_device::EFC;
 use crate::pmc::PmcError;
 
 pub struct Efc {

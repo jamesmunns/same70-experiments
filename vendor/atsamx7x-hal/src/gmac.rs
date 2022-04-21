@@ -5,7 +5,7 @@ use core::{
     ptr::NonNull,
 };
 
-use atsamx7x_hal::target_device::{GMAC, PIOD};
+use crate::target_device::{GMAC, PIOD};
 use groundhog::RollingTimer;
 use smoltcp::phy::{
     Checksum, ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken,
