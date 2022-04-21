@@ -151,7 +151,12 @@ impl SelectedTarget {
 
 impl Spi0 {
     // TODO: Always gives you an 8-bit, MODE0, SPI port.
-    pub fn new(spi0: SPI0, initial_freq: SpiFreq, pins: Spi0Pins, pmc: &mut Pmc) -> Result<Self, ()> {
+    pub fn new(
+        spi0: SPI0,
+        initial_freq: SpiFreq,
+        pins: Spi0Pins,
+        pmc: &mut Pmc,
+    ) -> Result<Self, ()> {
         // TODO: For now all the "baud divisor" math assumes an MCLK of
         // 150MHz. Update that code before removing this check!
         {

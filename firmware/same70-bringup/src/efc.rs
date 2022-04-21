@@ -14,17 +14,15 @@ impl Efc {
             w
         });
 
-        Self {
-            periph,
-        }
+        Self { periph }
     }
 
     pub fn set_wait_states(&mut self, fws: FlashWaitStates) {
         let fws_bits = fws as u8;
 
-        self.periph.eefc_fmr.modify(|_r, w| {
-            unsafe { w.fws().bits(fws_bits) }
-        });
+        self.periph
+            .eefc_fmr
+            .modify(|_r, w| unsafe { w.fws().bits(fws_bits) });
     }
 }
 

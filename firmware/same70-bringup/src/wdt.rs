@@ -6,14 +6,10 @@ pub struct Wdt {
 
 impl Wdt {
     pub fn new(periph: WDT) -> Self {
-        Self {
-            periph
-        }
+        Self { periph }
     }
 
     pub fn disable(&mut self) {
-        self.periph.wdt_mr.modify(|_r, w| {
-            w.wddis().set_bit()
-        });
+        self.periph.wdt_mr.modify(|_r, w| w.wddis().set_bit());
     }
 }

@@ -9,11 +9,11 @@ pub use atsamx7x_hal as hal; // memory layout
 
 use hal::target_device::RTT;
 use panic_probe as _;
-pub mod gmac;
-pub mod spi;
-pub mod pmc;
 pub mod efc;
+pub mod gmac;
 pub mod pio;
+pub mod pmc;
+pub mod spi;
 pub mod wdt;
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
@@ -515,13 +515,11 @@ use groundhog::RollingTimer;
 static IS_GRT_INIT: AtomicBool = AtomicBool::new(false);
 const TICK_SCALER: u32 = 4;
 
-pub struct GlobalRollingTimer {
-
-}
+pub struct GlobalRollingTimer {}
 
 impl Default for GlobalRollingTimer {
     fn default() -> Self {
-        GlobalRollingTimer { }
+        GlobalRollingTimer {}
     }
 }
 

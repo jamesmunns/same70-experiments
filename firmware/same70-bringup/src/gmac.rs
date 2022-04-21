@@ -1,18 +1,33 @@
-use core::{cell::UnsafeCell, ptr::NonNull, ops::{Deref, DerefMut}, marker::PhantomData};
+use core::{
+    cell::UnsafeCell,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 
 use atsamx7x_hal::target_device::{GMAC, PIOD};
 use groundhog::RollingTimer;
-use smoltcp::phy::{Device, RxToken, TxToken, DeviceCapabilities, Medium, ChecksumCapabilities, Checksum};
+use smoltcp::phy::{
+    Checksum, ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken,
+};
 
-use crate::{GlobalRollingTimer, pio::{Pin, PeriphA}, pmc::{Pmc, PeripheralIdentifier}};
+use crate::{
+    pio::{PeriphA, Pin},
+    pmc::{PeripheralIdentifier, Pmc},
+    GlobalRollingTimer,
+};
 
 const NUM_RX_BUFS: usize = 4;
 const NUM_TX_BUFS: usize = 4;
 const RX_BUF_SIZE: usize = 1024;
 const TX_BUF_SIZE: usize = 1024;
 
-const RX_BUF_DEFAULT: RxBuffer = RxBuffer { buf: UnsafeCell::new([0u8; RX_BUF_SIZE]) };
-const TX_BUF_DEFAULT: TxBuffer = TxBuffer { buf: UnsafeCell::new([0u8; TX_BUF_SIZE]) };
+const RX_BUF_DEFAULT: RxBuffer = RxBuffer {
+    buf: UnsafeCell::new([0u8; RX_BUF_SIZE]),
+};
+const TX_BUF_DEFAULT: TxBuffer = TxBuffer {
+    buf: UnsafeCell::new([0u8; TX_BUF_SIZE]),
+};
 
 const RX_BUF_DESC_DEFAULT: RxBufferDescriptor = RxBufferDescriptor {
     words: UnsafeCell::new([0u32; 2]),
@@ -21,7 +36,6 @@ const RX_BUF_DESC_DEFAULT: RxBufferDescriptor = RxBufferDescriptor {
 const TX_BUF_DESC_DEFAULT: TxBufferDescriptor = TxBufferDescriptor {
     words: UnsafeCell::new([0u32; 2]),
 };
-
 
 // TODO: This needs a specific linker section (probably)
 // Todo: UnsafeCell?
@@ -59,7 +73,7 @@ pub struct GmacTxToken<'a> {
 impl<'a> RxToken for GmacRxToken<'a> {
     fn consume<R, F>(mut self, _timestamp: smoltcp::time::Instant, f: F) -> smoltcp::Result<R>
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
         // defmt::println!("RxCons: {=u32:08X}", timestamp.total_millis() as u32);
         defmt::trace!("RX: {=[u8]:02X}", &self.rf);
@@ -68,9 +82,14 @@ impl<'a> RxToken for GmacRxToken<'a> {
 }
 
 impl<'a> TxToken for GmacTxToken<'a> {
-    fn consume<R, F>(self, _timestamp: smoltcp::time::Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(
+        self,
+        _timestamp: smoltcp::time::Instant,
+        len: usize,
+        f: F,
+    ) -> smoltcp::Result<R>
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
         // defmt::println!("TxCons: {=u32:08X}", timestamp.total_millis() as u32);
         let mut tf = self.gmac.alloc_write_frame().unwrap();
@@ -92,16 +111,12 @@ impl<'a> Device<'a> for Gmac {
                 rf: rxf,
                 _plt: PhantomData,
             },
-            GmacTxToken {
-                gmac: self,
-            }
+            GmacTxToken { gmac: self },
         ))
     }
 
     fn transmit(&'a mut self) -> Option<Self::TxToken> {
-        Some(GmacTxToken {
-            gmac: self
-        })
+        Some(GmacTxToken { gmac: self })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -156,17 +171,13 @@ impl Deref for ReadFrame {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            core::slice::from_raw_parts(self.bufr.as_ptr().cast(), self.len)
-        }
+        unsafe { core::slice::from_raw_parts(self.bufr.as_ptr().cast(), self.len) }
     }
 }
 
 impl DerefMut for ReadFrame {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), self.len)
-        }
+        unsafe { core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), self.len) }
     }
 }
 
@@ -174,17 +185,13 @@ impl Deref for WriteFrame {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            core::slice::from_raw_parts(self.bufr.as_ptr().cast(), TX_BUF_SIZE)
-        }
+        unsafe { core::slice::from_raw_parts(self.bufr.as_ptr().cast(), TX_BUF_SIZE) }
     }
 }
 
 impl DerefMut for WriteFrame {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), TX_BUF_SIZE)
-        }
+        unsafe { core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), TX_BUF_SIZE) }
     }
 }
 
@@ -217,13 +224,13 @@ impl WriteFrame {
         let len = len.min(TX_BUF_SIZE).min(0x3FFF) as u32;
 
         let mut new_w1 = 0;
-                                    // Bit 31 is zeroed to mark this as "ready"
-        new_w1 |= wrap_bit;         // Bit 30: Wrap
-                                    // Bits 29:17 are status/reserved bits, okay to clear
-                                    // Bit 16 is zeroed to have CRC calc offloaded
-        new_w1 |= 0x0000_8000;      // Bit 15: Last Buffer in Frame
-                                    // Bit 14 is reserved
-        new_w1 |= len;              // Bits 13:0: Size
+        // Bit 31 is zeroed to mark this as "ready"
+        new_w1 |= wrap_bit; // Bit 30: Wrap
+                            // Bits 29:17 are status/reserved bits, okay to clear
+                            // Bit 16 is zeroed to have CRC calc offloaded
+        new_w1 |= 0x0000_8000; // Bit 15: Last Buffer in Frame
+                               // Bit 14 is reserved
+        new_w1 |= len; // Bits 13:0: Size
 
         // Store the word to make it active for the transmit hardware to process.
         desc.set_word_1(new_w1);
@@ -232,9 +239,7 @@ impl WriteFrame {
         // yolo
         {
             let gmac = &*GMAC::ptr();
-            gmac.gmac_ncr.modify(|_r, w| {
-                w.tstart().set_bit()
-            });
+            gmac.gmac_ncr.modify(|_r, w| w.tstart().set_bit());
         }
     }
 
@@ -244,12 +249,7 @@ impl WriteFrame {
 }
 
 impl Gmac {
-    pub fn new(
-        periph: GMAC,
-        pins: GmacPins,
-        pmc: &mut Pmc,
-        mac_addr: [u8; 6],
-    ) -> Result<Self, ()> {
+    pub fn new(periph: GMAC, pins: GmacPins, pmc: &mut Pmc, mac_addr: [u8; 6]) -> Result<Self, ()> {
         // Enable the gmac peripheral
         pmc.enable_peripherals(&[PeripheralIdentifier::GMAC])
             .map_err(drop)?;
@@ -347,18 +347,41 @@ impl Gmac {
         let timer = GlobalRollingTimer::default();
         if timer.seconds_since(self.last_stat_poll) >= 10 {
             self.last_stat_poll = timer.get_ticks();
-            defmt::info!("Frames Transmitted: {=u32}", self.periph.gmac_ft.read().bits());
+            defmt::info!(
+                "Frames Transmitted: {=u32}",
+                self.periph.gmac_ft.read().bits()
+            );
             defmt::info!("Frames Received: {=u32}", self.periph.gmac_fr.read().bits());
 
-            defmt::info!("Transmit Underruns: {=u32}", self.periph.gmac_tur.read().bits());
-            defmt::info!("Single Collision Frames: {=u32}", self.periph.gmac_scf.read().bits());
-            defmt::info!("Frames Check Seq Errors: {=u32}", self.periph.gmac_fcse.read().bits());
-            defmt::info!("Frame Length Field Errors: {=u32}", self.periph.gmac_lffe.read().bits());
+            defmt::info!(
+                "Transmit Underruns: {=u32}",
+                self.periph.gmac_tur.read().bits()
+            );
+            defmt::info!(
+                "Single Collision Frames: {=u32}",
+                self.periph.gmac_scf.read().bits()
+            );
+            defmt::info!(
+                "Frames Check Seq Errors: {=u32}",
+                self.periph.gmac_fcse.read().bits()
+            );
+            defmt::info!(
+                "Frame Length Field Errors: {=u32}",
+                self.periph.gmac_lffe.read().bits()
+            );
 
-            defmt::info!("IP Header Checksum Errors: {=u32}", self.periph.gmac_ihce.read().bits());
-            defmt::info!("TCP Checksum Errors: {=u32}", self.periph.gmac_tce.read().bits());
-            defmt::info!("UDP Checksum Errors: {=u32}", self.periph.gmac_uce.read().bits());
-
+            defmt::info!(
+                "IP Header Checksum Errors: {=u32}",
+                self.periph.gmac_ihce.read().bits()
+            );
+            defmt::info!(
+                "TCP Checksum Errors: {=u32}",
+                self.periph.gmac_tce.read().bits()
+            );
+            defmt::info!(
+                "UDP Checksum Errors: {=u32}",
+                self.periph.gmac_uce.read().bits()
+            );
         }
     }
 
@@ -375,8 +398,13 @@ impl Gmac {
                 let len = (desc.get_word_1() & 0x0000_0FFF) as usize;
 
                 let desc_addr = NonNull::new(desc.words.get().cast())?;
-                let buf_addr = NonNull::new(addr as *const [u8; RX_BUF_SIZE] as *mut [u8; RX_BUF_SIZE])?;
-                Some(ReadFrame { bufr: buf_addr, len, desc: desc_addr })
+                let buf_addr =
+                    NonNull::new(addr as *const [u8; RX_BUF_SIZE] as *mut [u8; RX_BUF_SIZE])?;
+                Some(ReadFrame {
+                    bufr: buf_addr,
+                    len,
+                    desc: desc_addr,
+                })
             } else {
                 None
             }
@@ -413,15 +441,11 @@ impl Gmac {
     }
 
     fn miim_mgmt_port_enable(&mut self) {
-        self.periph.gmac_ncr.modify(|_r, w| {
-            w.mpe().set_bit()
-        });
+        self.periph.gmac_ncr.modify(|_r, w| w.mpe().set_bit());
     }
 
     fn miim_mgmt_port_disable(&mut self) {
-        self.periph.gmac_ncr.modify(|_r, w| {
-            w.mpe().clear_bit()
-        });
+        self.periph.gmac_ncr.modify(|_r, w| w.mpe().clear_bit());
     }
 
     fn miim_is_busy(&mut self) -> bool {
@@ -474,7 +498,7 @@ impl Gmac {
         defmt::println!("Waiting for miim idle...");
         let val = self.periph.gmac_nsr.read().bits();
         defmt::println!("{=u32:08X}", val);
-        while self.miim_is_busy() { }
+        while self.miim_is_busy() {}
 
         defmt::println!("Reset PHY...");
 
@@ -482,10 +506,10 @@ impl Gmac {
         let start = timer.get_ticks();
 
         // TODO: How long SHOULD this be?
-        while self.miim_is_busy() || (timer.millis_since(start) < 5) { }
+        while self.miim_is_busy() || (timer.millis_since(start) < 5) {}
 
         self.miim_start_read(0);
-        while self.miim_is_busy() { }
+        while self.miim_is_busy() {}
         let val = self.miim_read_data_get();
         defmt::println!("New Reg 0 Val: {=u16:04X}", val);
 
@@ -495,7 +519,7 @@ impl Gmac {
         // Wait for link to come up
         loop {
             self.miim_start_read(1);
-            while self.miim_is_busy() { }
+            while self.miim_is_busy() {}
             let val = self.miim_read_data_get();
             if (val & 0x0004) != 0 {
                 defmt::println!("Link up!");
@@ -524,7 +548,9 @@ impl Gmac {
 
         // //disable all GMAC interrupts for QUEUE 0
         // GMAC_REGS->GMAC_IDR = GMAC_INT_ALL;
-        self.periph.gmac_idr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
+        self.periph
+            .gmac_idr
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // //disable all GMAC interrupts for QUEUE 1
         // GMAC_REGS->GMAC_IDRPQ[0] = GMAC_INT_ALL;
@@ -542,9 +568,7 @@ impl Gmac {
 
         // //Clear statistics register
         // GMAC_REGS->GMAC_NCR |=  GMAC_NCR_CLRSTAT_Msk;
-        self.periph.gmac_ncr.modify(|_r, w| {
-            w.clrstat().set_bit()
-        });
+        self.periph.gmac_ncr.modify(|_r, w| w.clrstat().set_bit());
 
         // //Clear RX Status
         // GMAC_REGS->GMAC_RSR =  GMAC_RSR_RXOVR_Msk | GMAC_RSR_REC_Msk | GMAC_RSR_BNA_Msk  | GMAC_RSR_HNO_Msk;
@@ -606,23 +630,19 @@ impl Gmac {
             w
         });
 
-
         // // Set MAC address
         // DRV_PIC32CGMAC_LibSetMacAddr((const uint8_t *)(pMACDrv->sGmacData.gmacConfig.macAddress.v));
         self.periph.gmac_sa1.gmac_sab.write(|w| unsafe {
             let bottom: u32 = {
-                ((self.mac_addr[3] as u32) << 24) |
-                ((self.mac_addr[2] as u32) << 16) |
-                ((self.mac_addr[1] as u32) <<  8) |
-                (self.mac_addr[0] as u32)
+                ((self.mac_addr[3] as u32) << 24)
+                    | ((self.mac_addr[2] as u32) << 16)
+                    | ((self.mac_addr[1] as u32) << 8)
+                    | (self.mac_addr[0] as u32)
             };
             w.addr().bits(bottom)
         });
         self.periph.gmac_sa1.gmac_sat.write(|w| unsafe {
-            let top: u16 = {
-                ((self.mac_addr[5] as u16) <<  8) |
-                (self.mac_addr[4] as u16)
-            };
+            let top: u16 = { ((self.mac_addr[5] as u16) << 8) | (self.mac_addr[4] as u16) };
             w.addr().bits(top)
         });
 
@@ -643,8 +663,12 @@ impl Gmac {
         // DRV_PIC32CGMAC_LibRxFilterHash_Calculate
         //
         // Note: Set to all 1's to accept all multi-cast addresses
-        self.periph.gmac_hrb.write(|w| unsafe { w.addr().bits(0xFFFF_FFFF) });
-        self.periph.gmac_hrt.write(|w| unsafe { w.addr().bits(0xFFFF_FFFF) });
+        self.periph
+            .gmac_hrb
+            .write(|w| unsafe { w.addr().bits(0xFFFF_FFFF) });
+        self.periph
+            .gmac_hrt
+            .write(|w| unsafe { w.addr().bits(0xFFFF_FFFF) });
 
         // _DRV_GMAC_MacToEthFilter
         //
@@ -773,12 +797,12 @@ impl Gmac {
                 // DRBS is defined in multiples of 64-bytes
                 w.drbs().bits(drbs);
             }
-            w.txcoen().set_bit();   // Enable Checksum Offload
-            w.txpbms().set_bit();   // Use full 4KiB of TX space (???)
-            w.rxbms().full();       // Use full 4KiB of RX space (???)
-            w.espa().clear_bit();   // Disable endianness swap for packet data access
-            w.esma().clear_bit();   // Disable endianness swap for management desc access
-            w.fbldo().incr4();      // AHB increments of 4 (???)
+            w.txcoen().set_bit(); // Enable Checksum Offload
+            w.txpbms().set_bit(); // Use full 4KiB of TX space (???)
+            w.rxbms().full(); // Use full 4KiB of RX space (???)
+            w.espa().clear_bit(); // Disable endianness swap for packet data access
+            w.esma().clear_bit(); // Disable endianness swap for management desc access
+            w.fbldo().incr4(); // AHB increments of 4 (???)
 
             w
         });
@@ -799,7 +823,6 @@ impl Gmac {
             w.westat().set_bit();
             w
         });
-
     }
 }
 
@@ -830,13 +853,7 @@ impl RxBufferDescriptor {
     }
 
     fn get_word_1(&self) -> u32 {
-        unsafe {
-            self.words
-                .get()
-                .cast::<u32>()
-                .add(1)
-                .read_volatile()
-        }
+        unsafe { self.words.get().cast::<u32>().add(1).read_volatile() }
     }
 
     // NOTE: the software never really needs to set word 1 of the RxBufferDescriptor,
@@ -846,13 +863,7 @@ impl RxBufferDescriptor {
     // incoming messages - which we don't.
     #[allow(dead_code)]
     fn set_word_1(&self, val: u32) {
-        unsafe {
-            self.words
-                .get()
-                .cast::<u32>()
-                .add(1)
-                .write_volatile(val)
-        }
+        unsafe { self.words.get().cast::<u32>().add(1).write_volatile(val) }
     }
 }
 
@@ -884,23 +895,11 @@ impl TxBufferDescriptor {
     }
 
     fn get_word_1(&self) -> u32 {
-        unsafe {
-            self.words
-                .get()
-                .cast::<u32>()
-                .add(1)
-                .read_volatile()
-        }
+        unsafe { self.words.get().cast::<u32>().add(1).read_volatile() }
     }
 
     fn set_word_1(&self, val: u32) {
-        unsafe {
-            self.words
-                .get()
-                .cast::<u32>()
-                .add(1)
-                .write_volatile(val)
-        }
+        unsafe { self.words.get().cast::<u32>().add(1).write_volatile(val) }
     }
 }
 
@@ -920,7 +919,7 @@ struct TxBuffer {
     buf: UnsafeCell<[u8; TX_BUF_SIZE]>,
 }
 
-unsafe impl Sync for RxBuffer { }
-unsafe impl Sync for TxBuffer { }
-unsafe impl Sync for RxBufferDescriptor { }
-unsafe impl Sync for TxBufferDescriptor { }
+unsafe impl Sync for RxBuffer {}
+unsafe impl Sync for TxBuffer {}
+unsafe impl Sync for RxBufferDescriptor {}
+unsafe impl Sync for TxBufferDescriptor {}

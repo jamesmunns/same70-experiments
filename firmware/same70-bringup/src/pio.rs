@@ -1,5 +1,5 @@
-use core::marker::PhantomData;
 use crate::pmc::Pmc;
+use core::marker::PhantomData;
 
 // PinModes
 pub struct Gpio<T> {
@@ -22,7 +22,7 @@ pub struct Pio<PORT: sealed::Port> {
 }
 
 pub struct PortToken<PORT: sealed::Port> {
-    pd: PhantomData<PORT>
+    pd: PhantomData<PORT>,
 }
 
 // NOTE: `PIN` must be 0..=31.
@@ -35,24 +35,19 @@ impl<PORT: sealed::Port, const PIN: u8> Pin<PORT, Gpio<Output>, PIN> {
         // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
         let port = unsafe { &*PORT::PTR };
         let pinmask = 1 << (PIN as u32);
-        port.pio_codr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_codr.write(|w| unsafe { w.bits(pinmask) });
     }
 
     pub fn set_high(&mut self) {
         // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
         let port = unsafe { &*PORT::PTR };
         let pinmask = 1 << (PIN as u32);
-        port.pio_sodr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_sodr.write(|w| unsafe { w.bits(pinmask) });
     }
 }
 
 impl<PORT: sealed::Port, SUBMODE, const PIN: u8> Pin<PORT, Gpio<SUBMODE>, PIN> {
     pub fn into_push_pull_output(self, initial_level: Level) -> Pin<PORT, Gpio<Output>, PIN> {
-
         // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
         let port = unsafe { &*PORT::PTR };
         let pinmask = 1 << (PIN as u32);
@@ -60,34 +55,22 @@ impl<PORT: sealed::Port, SUBMODE, const PIN: u8> Pin<PORT, Gpio<SUBMODE>, PIN> {
         // No need to touch pio_per, as we know the pin is already in GPIO (not Periph) mode
 
         // Disable "Multi Drive" mode
-        port.pio_mddr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_mddr.write(|w| unsafe { w.bits(pinmask) });
 
         // Disable Pull Up resistors
-        port.pio_pudr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_pudr.write(|w| unsafe { w.bits(pinmask) });
 
         // Disable Pull Down resistors
-        port.pio_ppddr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_ppddr.write(|w| unsafe { w.bits(pinmask) });
 
         // Enable Output Write registers
-        port.pio_ower.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_ower.write(|w| unsafe { w.bits(pinmask) });
 
         // Set initial output state as requested
         // DON'T use ODSR, as that is not an atomic register!
         match initial_level {
-            Level::Low => port.pio_codr.write(|w| unsafe {
-                w.bits(pinmask)
-            }),
-            Level::High => port.pio_sodr.write(|w| unsafe {
-                w.bits(pinmask)
-            }),
+            Level::Low => port.pio_codr.write(|w| unsafe { w.bits(pinmask) }),
+            Level::High => port.pio_sodr.write(|w| unsafe { w.bits(pinmask) }),
         }
 
         // TODO: We DON'T set the driver through PIO_DRIVER, as it is not
@@ -95,13 +78,9 @@ impl<PORT: sealed::Port, SUBMODE, const PIN: u8> Pin<PORT, Gpio<SUBMODE>, PIN> {
         // For now, we never change that at all, so just leave it as-is
 
         // Enable output mode
-        port.pio_oer.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_oer.write(|w| unsafe { w.bits(pinmask) });
 
-        Pin {
-            pd: PhantomData,
-        }
+        Pin { pd: PhantomData }
     }
 }
 
@@ -137,13 +116,9 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         });
 
         // Enable peripheral mode
-        port.pio_pdr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_pdr.write(|w| unsafe { w.bits(pinmask) });
 
-        Pin {
-            pd: PhantomData,
-        }
+        Pin { pd: PhantomData }
     }
 
     pub fn into_periph_mode_b(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphB, PIN> {
@@ -171,13 +146,9 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         });
 
         // Enable peripheral mode
-        port.pio_pdr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_pdr.write(|w| unsafe { w.bits(pinmask) });
 
-        Pin {
-            pd: PhantomData,
-        }
+        Pin { pd: PhantomData }
     }
 
     pub fn into_periph_mode_c(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphC, PIN> {
@@ -205,13 +176,9 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         });
 
         // Enable peripheral mode
-        port.pio_pdr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_pdr.write(|w| unsafe { w.bits(pinmask) });
 
-        Pin {
-            pd: PhantomData,
-        }
+        Pin { pd: PhantomData }
     }
 
     pub fn into_periph_mode_d(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphD, PIN> {
@@ -239,13 +206,9 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         });
 
         // Enable peripheral mode
-        port.pio_pdr.write(|w| unsafe {
-            w.bits(pinmask)
-        });
+        port.pio_pdr.write(|w| unsafe { w.bits(pinmask) });
 
-        Pin {
-            pd: PhantomData,
-        }
+        Pin { pd: PhantomData }
     }
 }
 
@@ -287,15 +250,13 @@ pub struct SplitPort<PORT: sealed::Port> {
 
 impl<PORT> Pio<PORT>
 where
-    PORT: sealed::Port
+    PORT: sealed::Port,
 {
     pub fn new(periph: PORT, pmc: &mut Pmc) -> Result<Self, ()> {
         // Should be impossible, but okay.
         pmc.enable_peripherals(&[PORT::PID]).map_err(drop)?;
 
-        Ok(Self {
-            periph,
-        })
+        Ok(Self { periph })
     }
 
     pub fn split(self) -> SplitPort<PORT> {
@@ -309,44 +270,44 @@ where
         });
 
         // Set all pins to GPIO/"PIO" mode (not peripheral mode)
-        self.periph.pio_per.write(|w| unsafe {
-            w.bits(0xFFFF_FFFF)
-        });
+        self.periph
+            .pio_per
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // Disable "Multi Drive" mode
-        self.periph.pio_mddr.write(|w| unsafe {
-            w.bits(0xFFFF_FFFF)
-        });
+        self.periph
+            .pio_mddr
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // Disable Pull Up resistors
-        self.periph.pio_pudr.write(|w| unsafe {
-            w.bits(0xFFFF_FFFF)
-        });
+        self.periph
+            .pio_pudr
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // Disable Pull Down resistors
-        self.periph.pio_ppddr.write(|w| unsafe {
-            w.bits(0xFFFF_FFFF)
-        });
+        self.periph
+            .pio_ppddr
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // Disable Output Write registers
-        self.periph.pio_owdr.write(|w| unsafe {
-            w.bits(0xFFFF_FFFF)
-        });
+        self.periph
+            .pio_owdr
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // Disable output mode
-        self.periph.pio_odr.write(|w| unsafe {
-            w.bits(0xFFFF_FFFF)
-        });
+        self.periph
+            .pio_odr
+            .write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
         // Set initial output state to low
-        self.periph.pio_odsr.write(|w| unsafe {
-            w.bits(0x0000_0000)
-        });
+        self.periph
+            .pio_odsr
+            .write(|w| unsafe { w.bits(0x0000_0000) });
 
         // Set initial drive strength to low
-        self.periph.pio_driver.write(|w| unsafe {
-            w.bits(0x0000_0000)
-        });
+        self.periph
+            .pio_driver
+            .write(|w| unsafe { w.bits(0x0000_0000) });
 
         SplitPort {
             token: PortToken { pd: PhantomData },
@@ -387,9 +348,9 @@ where
 }
 
 mod sealed {
-    use core::ops::Deref;
-    use atsamx7x_hal::target_device::{pioa, PIOA, PIOB, PIOC, PIOD, PIOE};
     use crate::pmc::PeripheralIdentifier;
+    use atsamx7x_hal::target_device::{pioa, PIOA, PIOB, PIOC, PIOD, PIOE};
+    use core::ops::Deref;
 
     pub trait Port: Deref<Target = pioa::RegisterBlock> {
         const PID: PeripheralIdentifier;

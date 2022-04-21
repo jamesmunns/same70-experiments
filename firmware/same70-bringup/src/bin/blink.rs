@@ -3,8 +3,8 @@
 
 use cortex_m::asm::delay;
 use groundhog::RollingTimer;
-use same70_bringup::GlobalRollingTimer;
 use same70_bringup::pio::Level;
+use same70_bringup::GlobalRollingTimer;
 use same70_bringup::{
     self as _,
     efc::Efc,

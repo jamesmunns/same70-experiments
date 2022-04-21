@@ -80,10 +80,14 @@ fn main() -> ! {
 
     let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 1] = [
         IpCidr::new(Ipv4Address::UNSPECIFIED.into(), 24),
-    ]).unwrap();
-    let neighbor_cache: &'static mut _ = singleton!(: [Option<(IpAddress, Neighbor)>; 8] = [None; 8]).unwrap();
-    let sockets: &'static mut _ = singleton!(: [SocketStorage<'static>; 8] = [SocketStorage::EMPTY; 8]).unwrap();
-    let routes_storage: &'static mut _ = singleton!(: [Option<(IpCidr, Route)>; 1] = [None; 1]).unwrap();
+    ])
+    .unwrap();
+    let neighbor_cache: &'static mut _ =
+        singleton!(: [Option<(IpAddress, Neighbor)>; 8] = [None; 8]).unwrap();
+    let sockets: &'static mut _ =
+        singleton!(: [SocketStorage<'static>; 8] = [SocketStorage::EMPTY; 8]).unwrap();
+    let routes_storage: &'static mut _ =
+        singleton!(: [Option<(IpCidr, Route)>; 1] = [None; 1]).unwrap();
     let routes = Routes::new(routes_storage.as_mut_slice());
 
     let mac_addr = gmac.mac_addr();
@@ -121,10 +125,10 @@ fn main() -> ! {
 
         // TODO: This will roll over after 145 hours!
         match iface.poll(Instant::from_micros(timer.micros_since(start))) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 defmt::println!("Error: {:?}", e);
-            },
+            }
         }
 
         let event = iface.get_socket::<Dhcpv4Socket>(dhcp_handle).poll();
@@ -175,14 +179,16 @@ fn main() -> ! {
 
         let mut to_send = None;
         if socket.can_recv() {
-            socket.recv(|buffer| {
-                defmt::println!("RECV!");
-                defmt::println!("    len: {=usize}", buffer.len());
-                defmt::println!("    dat: {=[u8]}", buffer);
-                buf[..buffer.len()].copy_from_slice(buffer);
-                to_send = Some(&buf[..buffer.len()]);
-                (buffer.len(), ())
-            }).unwrap();
+            socket
+                .recv(|buffer| {
+                    defmt::println!("RECV!");
+                    defmt::println!("    len: {=usize}", buffer.len());
+                    defmt::println!("    dat: {=[u8]}", buffer);
+                    buf[..buffer.len()].copy_from_slice(buffer);
+                    to_send = Some(&buf[..buffer.len()]);
+                    (buffer.len(), ())
+                })
+                .unwrap();
         }
 
         if let Some(tx) = to_send {

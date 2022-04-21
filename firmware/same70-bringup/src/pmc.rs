@@ -1,9 +1,9 @@
-use atsamx7x_hal::target_device::PMC;
 use crate::efc::Efc;
 use crate::efc::FlashWaitStates;
+use atsamx7x_hal::target_device::PMC;
 
-pub use atsamx7x_hal::target_device::pmc::pmc_mckr::PRES_A as MckPrescaler;
 pub use atsamx7x_hal::target_device::pmc::pmc_mckr::MDIV_A as MckDivider;
+pub use atsamx7x_hal::target_device::pmc::pmc_mckr::PRES_A as MckPrescaler;
 
 pub struct Pmc {
     periph: PMC,
@@ -42,12 +42,10 @@ pub enum MasterClockSource {
 
 pub struct ClockSettings {
     // "Main Clock" is abbreviated "MAINCK"
-
     /// Main Clock Oscillator Source
     pub main_clk_osc_src: MainClockOscillatorSource,
 
     // "Master Clock" is abbreviated "MCK"
-
     /// Master Clock Prescaler
     pub mck_pres: MckPrescaler,
     /// Master Clock Source
@@ -90,7 +88,7 @@ impl ClockSettings {
                 let plla_ck = plla_ck / (self.divider_a as f32);
 
                 plla_ck
-            },
+            }
         };
 
         // MCK input first passes through a prescaler...
@@ -137,11 +135,8 @@ impl ClockSettings {
             let mck_u8 = mck as u8;
             Ok(mck_u8)
         }
-
     }
 }
-
-
 
 impl Pmc {
     pub fn new(periph: PMC) -> Self {
@@ -239,9 +234,9 @@ impl Pmc {
             w.wpen().clear_bit();
             w
         });
-        efc.periph.eefc_fmr.modify(|_r, w| {
-            unsafe { w.fws().bits(fws as u8) }
-        });
+        efc.periph
+            .eefc_fmr
+            .modify(|_r, w| unsafe { w.fws().bits(fws as u8) });
 
         // Note: This follows Datasheet 31.17 "Recommendeded Programming Sequence"
         //
@@ -297,7 +292,7 @@ impl Pmc {
         // can be programmed in a single write operation. If MULA or DIVA is modified, the LOCKA bit goes
         // low to indicate that PLLA is not yet ready. When PLLA is locked, LOCKA is set again. The user
         // must wait for the LOCKA bit to be set before using the PLLA output clock.
-        while self.periph.pmc_sr.read().locka().bit_is_clear() { }
+        while self.periph.pmc_sr.read().locka().bit_is_clear() {}
 
         // # Step 7
         // Select MCK and HCLK:
@@ -324,27 +319,25 @@ impl Pmc {
         // If a new value for PMC_MCKR.CSS corresponds to any of the available PLL clocks:
         // a. Program PMC_MCKR.PRES.
         // b. Wait for PMC_SR.MCKRDY to be set.
-        self.periph.pmc_mckr.modify(|_r, w| {
-            w.pres().variant(cfg.mck_pres)
-        });
-        while self.periph.pmc_sr.read().mckrdy().bit_is_clear() { }
+        self.periph
+            .pmc_mckr
+            .modify(|_r, w| w.pres().variant(cfg.mck_pres));
+        while self.periph.pmc_sr.read().mckrdy().bit_is_clear() {}
 
         // c. Program PMC_MCKR.MDIV.
         // d. Wait for PMC_SR.MCKRDY to be set.
-        self.periph.pmc_mckr.modify(|_r, w| {
-            w.mdiv().variant(cfg.mck_div)
-        });
-        while self.periph.pmc_sr.read().mckrdy().bit_is_clear() { }
+        self.periph
+            .pmc_mckr
+            .modify(|_r, w| w.mdiv().variant(cfg.mck_div));
+        while self.periph.pmc_sr.read().mckrdy().bit_is_clear() {}
 
         // TODO: Again: a hardcoded compile time check
         let MasterClockSource::PllaClock = cfg.mck_src;
 
         // e. Program PMC_MCKR.CSS.
         // f. Wait for PMC_SR.MCKRDY to be set.
-        self.periph.pmc_mckr.modify(|_r, w| {
-            w.css().plla_clk()
-        });
-        while self.periph.pmc_sr.read().mckrdy().bit_is_clear() { }
+        self.periph.pmc_mckr.modify(|_r, w| w.css().plla_clk());
+        while self.periph.pmc_sr.read().mckrdy().bit_is_clear() {}
 
         // If a new value for PMC_MCKR.CSS corresponds to MAINCK or SLCK:
         // a. Program PMC_MCKR.CSS.
@@ -551,7 +544,7 @@ impl PeripheralIdentifier {
             GMAC_Q3 => Err(()),
             GMAC_Q4 => Err(()),
             GMAC_Q5 => Err(()),
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 }
