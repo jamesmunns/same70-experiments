@@ -1,15 +1,27 @@
 use core::{cell::UnsafeCell, ptr::NonNull, ops::{Deref, DerefMut}, marker::PhantomData};
 
-use atsamx7x_hal::target_device::{GMAC, generic::Reg, gmac::{gmac_idrpq::GMAC_IDRPQ_SPEC, gmac_isrpq::GMAC_ISRPQ_SPEC}};
+use atsamx7x_hal::target_device::{GMAC, PIOD};
 use groundhog::RollingTimer;
 use smoltcp::phy::{Device, RxToken, TxToken, DeviceCapabilities, Medium, ChecksumCapabilities, Checksum};
 
-use crate::GlobalRollingTimer;
+use crate::{GlobalRollingTimer, pio::{Pin, PeriphA}, pmc::{Pmc, PeripheralIdentifier}};
 
 const NUM_RX_BUFS: usize = 4;
 const NUM_TX_BUFS: usize = 4;
 const RX_BUF_SIZE: usize = 1024;
 const TX_BUF_SIZE: usize = 1024;
+
+const RX_BUF_DEFAULT: RxBuffer = RxBuffer { buf: UnsafeCell::new([0u8; RX_BUF_SIZE]) };
+const TX_BUF_DEFAULT: TxBuffer = TxBuffer { buf: UnsafeCell::new([0u8; TX_BUF_SIZE]) };
+
+const RX_BUF_DESC_DEFAULT: RxBufferDescriptor = RxBufferDescriptor {
+    words: UnsafeCell::new([0u32; 2]),
+};
+
+const TX_BUF_DESC_DEFAULT: TxBufferDescriptor = TxBufferDescriptor {
+    words: UnsafeCell::new([0u32; 2]),
+};
+
 
 // TODO: This needs a specific linker section (probably)
 // Todo: UnsafeCell?
@@ -20,6 +32,21 @@ static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 static UNUSED_TX_BUF_DESC: TxBufferDescriptor = TX_BUF_DESC_DEFAULT;
 
+// TODO: This should probably be replaced with a struct with a lot of generics,
+// or some other way. For now, support a single fixed pin mapping option
+// (PRs welcome!)
+pub struct GmacPins {
+    pub gtxck: Pin<PIOD, PeriphA, 00>,
+    pub gtxen: Pin<PIOD, PeriphA, 01>,
+    pub gtx0: Pin<PIOD, PeriphA, 02>,
+    pub gtx1: Pin<PIOD, PeriphA, 03>,
+    pub grxdv: Pin<PIOD, PeriphA, 04>,
+    pub grx0: Pin<PIOD, PeriphA, 05>,
+    pub grx1: Pin<PIOD, PeriphA, 06>,
+    pub grxer: Pin<PIOD, PeriphA, 07>,
+    pub gmdc: Pin<PIOD, PeriphA, 08>,
+    pub gmdio: Pin<PIOD, PeriphA, 09>,
+}
 
 pub struct GmacRxToken<'a> {
     rf: ReadFrame,
@@ -30,7 +57,7 @@ pub struct GmacTxToken<'a> {
 }
 
 impl<'a> RxToken for GmacRxToken<'a> {
-    fn consume<R, F>(mut self, timestamp: smoltcp::time::Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(mut self, _timestamp: smoltcp::time::Instant, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
     {
@@ -41,7 +68,7 @@ impl<'a> RxToken for GmacRxToken<'a> {
 }
 
 impl<'a> TxToken for GmacTxToken<'a> {
-    fn consume<R, F>(self, timestamp: smoltcp::time::Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, _timestamp: smoltcp::time::Instant, len: usize, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>
     {
@@ -100,6 +127,8 @@ pub struct Gmac {
     last_txgo: bool,
     last_bna: bool,
     last_stat_poll: u32,
+    _pins: GmacPins,
+    mac_addr: [u8; 6],
 }
 
 pub struct ReadFrame {
@@ -215,17 +244,35 @@ impl WriteFrame {
 }
 
 impl Gmac {
-    // TODO: Mark safe when possible.
-    pub unsafe fn new(periph: GMAC) -> Self {
-        defmt::println!("WARNING: Don't forget! We rely on configuration elsewhere for pins and stuff.");
+    pub fn new(
+        periph: GMAC,
+        pins: GmacPins,
+        pmc: &mut Pmc,
+        mac_addr: [u8; 6],
+    ) -> Result<Self, ()> {
+        // Enable the gmac peripheral
+        pmc.enable_peripherals(&[PeripheralIdentifier::GMAC])
+            .map_err(drop)?;
         let timer = GlobalRollingTimer::default();
-        Self {
+
+        // Initial configuration
+        let mut gmac = Self {
             periph,
+            _pins: pins,
             next_tx_idx: 0,
             last_txgo: false,
             last_bna: false,
             last_stat_poll: timer.get_ticks(),
-        }
+            mac_addr,
+        };
+        gmac.init();
+        gmac.miim_post_setup();
+
+        Ok(gmac)
+    }
+
+    pub fn mac_addr(&self) -> [u8; 6] {
+        self.mac_addr.clone()
     }
 
     pub fn query(&mut self) {
@@ -417,7 +464,7 @@ impl Gmac {
         self.periph.gmac_man.read().data().bits()
     }
 
-    pub fn miim_post_setup(&mut self) {
+    fn miim_post_setup(&mut self) {
         let timer = GlobalRollingTimer::default();
 
         defmt::println!("Starting MIIM setup");
@@ -459,7 +506,7 @@ impl Gmac {
         self.miim_mgmt_port_disable();
     }
 
-    pub fn init(&mut self) {
+    fn init(&mut self) {
         // Based on DRV_PIC32CGMAC_LibInit
         // //disable Tx
         // GMAC_REGS->GMAC_NCR &= ~GMAC_NCR_TXEN_Msk;
@@ -562,39 +609,19 @@ impl Gmac {
 
         // // Set MAC address
         // DRV_PIC32CGMAC_LibSetMacAddr((const uint8_t *)(pMACDrv->sGmacData.gmacConfig.macAddress.v));
-
-        // For now, use (one of) Microchip's MACs. This is temporary.
-        //
-        // 04-91-62   (hex)        Microchip Technology Inc.
-        // 049162     (base 16)    Microchip Technology Inc.
-        //                         2355 W. Chandler Blvd.
-        //                         Chandler  AZ  85224
-        //                         US
-
-        // GMAC_REGS->GMAC_SA[0].GMAC_SAB = (pMacAddr[3] << 24)
-        //                             | (pMacAddr[2] << 16)
-        //                             | (pMacAddr[1] <<  8)
-        //                             | (pMacAddr[0]);
-
-        // GMAC_REGS->GMAC_SA[0].GMAC_SAT = (pMacAddr[5] <<  8)
-        //                             | (pMacAddr[4]) ;
-
-        //  0  1  2  3  4  5
-        // 04:91:62:01:02:03
-
         self.periph.gmac_sa1.gmac_sab.write(|w| unsafe {
             let bottom: u32 = {
-                (0x01 << 24) |
-                (0x62 << 16) |
-                (0x91 <<  8) |
-                0x04
+                ((self.mac_addr[3] as u32) << 24) |
+                ((self.mac_addr[2] as u32) << 16) |
+                ((self.mac_addr[1] as u32) <<  8) |
+                (self.mac_addr[0] as u32)
             };
             w.addr().bits(bottom)
         });
         self.periph.gmac_sa1.gmac_sat.write(|w| unsafe {
             let top: u16 = {
-                (0x03 << 8) |
-                0x02
+                ((self.mac_addr[5] as u16) <<  8) |
+                (self.mac_addr[4] as u16)
             };
             w.addr().bits(top)
         });
@@ -776,46 +803,6 @@ impl Gmac {
     }
 }
 
-// Note: MIIM == MDIO == SMI
-
-// Relevant driver call chain
-//
-// DRV_GMAC_Initialize
-//     DRV_PIC32CGMAC_LibSysInt_Disable
-//         * Not much, just disabling interrupts?
-//     _DRV_GMAC_PHYInitialise
-//         * DRV_ETHPHY_Initialize
-//             * Data structure init?
-//         * DRV_ETHPHY_Open
-                // _DRV_ETHPHY_ClientObjectAllocate
-                //     * Data structures...
-                // DRV_MIIM_Open
-                //     _DRV_MIIM_GetObjectAndLock
-                //         * Data structures...
-                //     _DRV_MIIM_ClientAllocate
-                //         * Data structures...
-                //     _DRV_MIIM_ObjUnlock
-                //         * FreeRTOS stuff?
-//     DRV_PIC32CGMAC_LibInit
-//         Important! See below
-//     DRV_PIC32CGMAC_LibRxFilterHash_Calculate
-//         Important! (I think?)
-//     _DRV_GMAC_MacToEthFilter
-//         Used to calculate GMAC_NCFGR ?
-//     DRV_PIC32CGMAC_LibRxQueFilterInit
-//         Used to calculate priority filters? Unsure if necessary
-//     DRV_PIC32CGMAC_LibRxInit
-//     DRV_PIC32CGMAC_LibTxInit
-//     for each queue:
-//         DRV_PIC32CGMAC_LibInitTransfer
-//     DRV_PIC32CGMAC_LibSysIntStatus_Clear
-//     DRV_PIC32CGMAC_LibSysInt_Enable
-//     DRV_PIC32CGMAC_LibTransferEnable
-//     DRV_GMAC_EventInit
-//     if failed:
-//         _MACDeinit
-//     "remaining initialization is done by DRV_ETHMAC_PIC32MACTasks"
-
 #[repr(C, align(8))]
 struct RxBufferDescriptor {
     words: UnsafeCell<[u32; 2]>,
@@ -852,6 +839,12 @@ impl RxBufferDescriptor {
         }
     }
 
+    // NOTE: the software never really needs to set word 1 of the RxBufferDescriptor,
+    // as this contains status codes reported by the hardware.
+    //
+    // This would change if we did more robust status checking and reporting of the
+    // incoming messages - which we don't.
+    #[allow(dead_code)]
     fn set_word_1(&self, val: u32) {
         unsafe {
             self.words
@@ -864,6 +857,12 @@ impl RxBufferDescriptor {
 }
 
 impl TxBufferDescriptor {
+    // NOTE: the software never really needs to read word 0 of the TxBufferDescriptor,
+    // as this contains the pointer of the TX buffer, which the software writes.
+    //
+    // This would change if we used a more complex TX buffer chain, where we need to
+    // actually check the TX buffer address for some reason.
+    #[allow(dead_code)]
     fn get_word_0(&self) -> u32 {
         unsafe {
             self.words
@@ -925,14 +924,3 @@ unsafe impl Sync for RxBuffer { }
 unsafe impl Sync for TxBuffer { }
 unsafe impl Sync for RxBufferDescriptor { }
 unsafe impl Sync for TxBufferDescriptor { }
-
-const RX_BUF_DEFAULT: RxBuffer = RxBuffer { buf: UnsafeCell::new([0u8; RX_BUF_SIZE]) };
-const TX_BUF_DEFAULT: TxBuffer = TxBuffer { buf: UnsafeCell::new([0u8; TX_BUF_SIZE]) };
-
-const RX_BUF_DESC_DEFAULT: RxBufferDescriptor = RxBufferDescriptor {
-    words: UnsafeCell::new([0u32; 2]),
-};
-
-const TX_BUF_DESC_DEFAULT: TxBufferDescriptor = TxBufferDescriptor {
-    words: UnsafeCell::new([0u32; 2]),
-};

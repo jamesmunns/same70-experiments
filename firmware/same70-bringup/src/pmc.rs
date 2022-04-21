@@ -7,6 +7,7 @@ pub use atsamx7x_hal::target_device::pmc::pmc_mckr::MDIV_A as MckDivider;
 
 pub struct Pmc {
     periph: PMC,
+    settings: Option<ClockSettings>,
 }
 
 #[derive(Debug, PartialEq, defmt::Format, Clone)]
@@ -69,7 +70,7 @@ pub struct ClockSettings {
 }
 
 impl ClockSettings {
-    fn calc_master_clk_mhz(&self) -> Result<u8, PmcError> {
+    pub fn calc_master_clk_mhz(&self) -> Result<u8, PmcError> {
         // NOTE: This is based on Figure 31-1 - "General Clock Distribution Block Diagram"
 
         // PLLACK is currently the (only) choice for driving the Master Clock Controller
@@ -152,7 +153,15 @@ impl Pmc {
 
         Self {
             periph,
+
+            // TODO: I could probably figure out the default settings...
+            // this is fine for now.
+            settings: None,
         }
+    }
+
+    pub fn settings(&self) -> Option<&ClockSettings> {
+        self.settings.as_ref()
     }
 
     pub fn enable_peripherals(&mut self, pids: &[PeripheralIdentifier]) -> Result<(), PmcError> {

@@ -37,13 +37,25 @@ board.PIOD.pio_per.write(|w| unsafe { w.bits(!0x0000_03FF) });
 
 use core::num::NonZeroU8;
 
-use atsamx7x_hal::target_device::SPI0;
+use atsamx7x_hal::target_device::{PIOD, SPI0};
 
-use crate::spi;
+use crate::{
+    pio::{PeriphB, Pin},
+    pmc::{PeripheralIdentifier, Pmc},
+};
 
+// This could be made generic, but hasn't yet been.
+pub struct Spi0Pins {
+    pub miso: Pin<PIOD, PeriphB, 20>,
+    pub mosi: Pin<PIOD, PeriphB, 21>,
+    pub spck: Pin<PIOD, PeriphB, 22>,
+    pub npcs1: Pin<PIOD, PeriphB, 25>,
+}
+
+// This could be made generic, but hasn't yet been.
 pub struct Spi0 {
     periph: SPI0,
-    current_freq: SpiFreq,
+    _current_freq: SpiFreq,
 }
 
 /// A collection of common SPI Frequencies.
@@ -137,22 +149,27 @@ impl SelectedTarget {
 }
 
 impl Spi0 {
-    pub fn new(spi0: SPI0, initial_freq: SpiFreq) -> Self {
-        // ASSUMPTIONS:
-        //
-        // At this point, we have:
-        //
-        // * Enabled the peripheral clock to a freq of 150MHz
-        // * Enabled + configured the following pins in peripheral mode:
-        //     * SPI0_SPCK  - PD22
-        //     * SPI0_MISO  - PD20
-        //     * SPI0_MOSI  - PD21
-        //     * SPI0_NPCS1 - PD25
-        defmt::println!("WARNING: Don't forget! We rely on configuration elsewhere for pins and stuff.");
+    // TODO: Always gives you an 8-bit, MODE0, SPI port.
+    pub fn new(spi0: SPI0, initial_freq: SpiFreq, pmc: &mut Pmc) -> Result<Self, ()> {
+        // TODO: For now all the "baud divisor" math assumes an MCLK of
+        // 150MHz. Update that code before removing this check!
+        {
+            let settings = pmc.settings().ok_or(())?;
+            let mclk = settings.calc_master_clk_mhz().map_err(drop)?;
+            if mclk != 150 {
+                return Err(());
+            }
+        }
+
+        // Enable the SPI0 peripheral
+        pmc.enable_peripherals(&[PeripheralIdentifier::SPI0])
+            .map_err(drop)?;
 
         spi0.spi_mr.write(|w| {
             // No delay between chip select switches
-            unsafe { w.dlybcs().bits(0); }
+            unsafe {
+                w.dlybcs().bits(0);
+            }
             // Start with npcs1 selected
             w.pcs().npcs1();
             // Local Loopback disabled
@@ -205,7 +222,7 @@ impl Spi0 {
                     w.csnaat().clear_bit();
                     // Hardcoded to "Mode 0"
                     w.ncpha().valid_leading_edge(); // NCPHA: 1/CPHA: 0
-                    w.cpol().idle_low();            // CPOL: 0
+                    w.cpol().idle_low(); // CPOL: 0
                 }
 
                 w
@@ -218,17 +235,17 @@ impl Spi0 {
             w
         });
 
-        Self {
+        Ok(Self {
             periph: spi0,
-            current_freq: initial_freq,
-        }
+            _current_freq: initial_freq,
+        })
     }
 
     pub fn transfer_basic(
         &mut self,
         target: SelectedTarget,
         txmt: &[u8],
-        recv: &mut [u8]
+        recv: &mut [u8],
     ) -> Result<(), ()> {
         // Basic length checks...
         if recv.len() != txmt.len() {
@@ -247,13 +264,18 @@ impl Spi0 {
 
         let mut tx_iter = rest
             .iter()
-            .map(|w| TxWord { last: false, data: *w })
-            .chain(core::iter::once(TxWord { last: true, data: *last }));
+            .map(|w| TxWord {
+                last: false,
+                data: *w,
+            })
+            .chain(core::iter::once(TxWord {
+                last: true,
+                data: *last,
+            }));
 
         let mut rx_iter = recv.iter_mut().peekable();
         let mut tx_done = false;
         let mut rx_done = false;
-
 
         // Read (and clear) any status/error flags
         let status = self.periph.spi_sr.read();
@@ -268,13 +290,11 @@ impl Spi0 {
             if !tx_done && status.tdre().bit_is_set() {
                 // Is there any data left to send?
                 if let Some(dat) = tx_iter.next() {
-                    self.periph.spi_tdr.write(|w| {
-                        unsafe {
-                            w.lastxfer().bit(dat.last);
-                            w.pcs().bits(tgt_pcs);
-                            w.td().bits(dat.data.into());
-                            w
-                        }
+                    self.periph.spi_tdr.write(|w| unsafe {
+                        w.lastxfer().bit(dat.last);
+                        w.pcs().bits(tgt_pcs);
+                        w.td().bits(dat.data.into());
+                        w
                     });
                 } else {
                     // Nope! All done sending.

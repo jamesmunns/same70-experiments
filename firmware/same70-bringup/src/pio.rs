@@ -3,17 +3,10 @@ use crate::pmc::Pmc;
 
 // PinModes
 pub struct Default;
-pub struct Output;
-pub struct Input;
 pub struct PeriphA;
 pub struct PeriphB;
 pub struct PeriphC;
 pub struct PeriphD;
-
-pub enum Level {
-    Low,
-    High,
-}
 
 pub struct Pio<PORT: sealed::Port> {
     periph: PORT,
