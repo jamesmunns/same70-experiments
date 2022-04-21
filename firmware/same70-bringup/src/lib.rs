@@ -11,6 +11,8 @@ use hal::target_device::{Peripherals, WDT, RTT};
 use panic_probe as _;
 pub mod gmac;
 pub mod spi;
+pub mod pmc;
+pub mod efc;
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message
 // this prevents the panic message being printed *twice* when `defmt::panic` is invoked
@@ -23,20 +25,6 @@ fn panic() -> ! {
 pub fn exit() -> ! {
     loop {
         cortex_m::asm::bkpt();
-    }
-}
-
-// defmt-test 0.3.0 has the limitation that this `#[tests]` attribute can only be used
-// once within a crate. the module can be in any file but there can only be at most
-// one `#[tests]` module in this library crate
-#[cfg(test)]
-#[defmt_test::tests]
-mod unit_tests {
-    use defmt::assert;
-
-    #[test]
-    fn it_works() {
-        assert!(true)
     }
 }
 
@@ -446,7 +434,7 @@ fn clock_setup(board: &Peripherals) {
     // CSS is used to select the clock source of MCK and HCLK. By default, the selected clock source is
     // MAINCK.
     //
-    // PRES is used to define the HCLK and MCK prescaler.s The user can choose between different
+    // PRES is used to define the HCLK and MCK prescalers The user can choose between different
     // values (1, 2, 3, 4, 8, 16, 32, 64). Prescaler output is the selected clock source frequency divided by
     // the PRES value.
     //
@@ -506,14 +494,6 @@ fn clock_setup(board: &Peripherals) {
     // information, see "Clock Switching Waveforms".
     //
     // MCK is MAINCK divided by 2.
-
-    // NOTE: Skipping step 9, as we don't need any peripherals (yet).
-
-    // TODO(AJM): This:
-
-    // /* Enable Peripheral Clock */
-    // PMC_REGS->PMC_PCER0=0x875c00;
-    // PMC_REGS->PMC_PCER1=0x4000080;
 }
 
 pub fn pet_watchdog() {
