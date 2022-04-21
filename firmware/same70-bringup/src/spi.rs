@@ -56,6 +56,7 @@ pub struct Spi0Pins {
 pub struct Spi0 {
     periph: SPI0,
     _current_freq: SpiFreq,
+    _pins: Spi0Pins,
 }
 
 /// A collection of common SPI Frequencies.
@@ -150,7 +151,7 @@ impl SelectedTarget {
 
 impl Spi0 {
     // TODO: Always gives you an 8-bit, MODE0, SPI port.
-    pub fn new(spi0: SPI0, initial_freq: SpiFreq, pmc: &mut Pmc) -> Result<Self, ()> {
+    pub fn new(spi0: SPI0, initial_freq: SpiFreq, pins: Spi0Pins, pmc: &mut Pmc) -> Result<Self, ()> {
         // TODO: For now all the "baud divisor" math assumes an MCLK of
         // 150MHz. Update that code before removing this check!
         {
@@ -238,6 +239,7 @@ impl Spi0 {
         Ok(Self {
             periph: spi0,
             _current_freq: initial_freq,
+            _pins: pins,
         })
     }
 

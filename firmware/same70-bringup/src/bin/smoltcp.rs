@@ -1,45 +1,82 @@
 #![no_main]
 #![no_std]
 
-use core::marker::PhantomData;
-use core::ops::Deref;
-
 use cortex_m::singleton;
 use groundhog::RollingTimer;
-use same70_bringup::{self as _, fixed_setup, hal, gmac::Gmac}; // global logger + panicking-behavior + memory layout
-use same70_bringup::GlobalRollingTimer;
-use smoltcp::iface::{Neighbor, InterfaceBuilder, SocketStorage, NeighborCache, Routes, Route, Interface};
-use smoltcp::phy::{Device, RxToken, TxToken};
-use smoltcp::socket::{TcpSocketBuffer, TcpSocket, TcpState, Dhcpv4Event, Dhcpv4Socket};
-use smoltcp::time::Instant;
-use smoltcp::wire::{IpCidr, IpAddress, EthernetAddress, HardwareAddress, Ipv4Address, Ipv4Cidr};
+use same70_bringup::{
+    efc::Efc,
+    gmac::{Gmac, GmacPins},
+    hal::target_device::Peripherals,
+    pio::Pio,
+    pmc::{
+        ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
+        PeripheralIdentifier, Pmc,
+    },
+    wdt::Wdt,
+    GlobalRollingTimer,
+}; // global logger + panicking-behavior + memory layout
+
+use smoltcp::{
+    iface::{Interface, InterfaceBuilder, Neighbor, NeighborCache, Route, Routes, SocketStorage},
+    phy::Device,
+    socket::{Dhcpv4Event, Dhcpv4Socket, TcpSocket, TcpSocketBuffer, TcpState},
+    time::Instant,
+    wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr},
+};
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    defmt::println!("Blink!");
-
     // Obtain PAC-level access
-    let board = hal::target_device::Peripherals::take().unwrap();
+    let board = Peripherals::take().unwrap();
 
-    // Setup with general purpose settings
-    fixed_setup(&board);
+    let mut efc = Efc::new(board.EFC);
+    let mut pmc = Pmc::new(board.PMC);
+
+    let clk_cfg = ClockSettings {
+        main_clk_osc_src: MainClockOscillatorSource::MainCk12MHz,
+        mck_pres: MckPrescaler::CLK_1,
+        mck_src: MasterClockSource::PllaClock,
+        mck_div: MckDivider::PCK_DIV2, // 300MHz / 2 = 150MHz
+        multiplier_a: 24,              // (24 + 1) * 12 = 300MHz
+        divider_a: 1,                  // 300MHz / 1 = 300MHz
+    };
+
+    defmt::unwrap!(pmc.set_clocks(&mut efc, clk_cfg));
+
     GlobalRollingTimer::init(board.RTT);
-    let timer = GlobalRollingTimer::default();
 
-    defmt::println!("Blankin.");
+    let mut wdt = Wdt::new(board.WDT);
+    wdt.disable();
 
-    defmt::println!("Creating GMAC...");
-    let mut gmac = unsafe { Gmac::new(board.GMAC) };
+    // TODO: This should *probably* move into HAL methods, once they exist.
+    // I'm not sure if any of these are actually used at the moment.
+    defmt::unwrap!(pmc.enable_peripherals(&[
+        PeripheralIdentifier::TC0_CHANNEL0,
+        PeripheralIdentifier::HSMCI,
+        PeripheralIdentifier::XDMAC,
+    ]));
 
-    defmt::println!("Initializing...");
-    gmac.init();
+    let piod_pins = defmt::unwrap!(Pio::new(board.PIOD, &mut pmc)).split();
+    let mut port_d_tok = piod_pins.token;
 
-    defmt::println!("MIIM setup...");
-    gmac.miim_post_setup();
-
-    // same70_bringup::exit();
-
-    defmt::println!("Polling...");
+    let gmac = defmt::unwrap!(Gmac::new(
+        board.GMAC,
+        GmacPins {
+            gtxck: piod_pins.p00.into_periph_mode_a(&mut port_d_tok),
+            gtxen: piod_pins.p01.into_periph_mode_a(&mut port_d_tok),
+            gtx0: piod_pins.p02.into_periph_mode_a(&mut port_d_tok),
+            gtx1: piod_pins.p03.into_periph_mode_a(&mut port_d_tok),
+            grxdv: piod_pins.p04.into_periph_mode_a(&mut port_d_tok),
+            grx0: piod_pins.p05.into_periph_mode_a(&mut port_d_tok),
+            grx1: piod_pins.p06.into_periph_mode_a(&mut port_d_tok),
+            grxer: piod_pins.p07.into_periph_mode_a(&mut port_d_tok),
+            gmdc: piod_pins.p08.into_periph_mode_a(&mut port_d_tok),
+            gmdio: piod_pins.p09.into_periph_mode_a(&mut port_d_tok),
+        },
+        &mut pmc,
+        // 04:91:62:01:02:03
+        [0x04, 0x91, 0x62, 0x01, 0x02, 0x03],
+    ));
 
     let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 1] = [
         IpCidr::new(Ipv4Address::UNSPECIFIED.into(), 24),
@@ -49,8 +86,10 @@ fn main() -> ! {
     let routes_storage: &'static mut _ = singleton!(: [Option<(IpCidr, Route)>; 1] = [None; 1]).unwrap();
     let routes = Routes::new(routes_storage.as_mut_slice());
 
+    let mac_addr = gmac.mac_addr();
+
     let mut iface = InterfaceBuilder::new(gmac, sockets.as_mut_slice())
-        .hardware_addr(EthernetAddress::from_bytes(&[0x04, 0x91, 0x62, 0x01, 0x02, 0x03]).into())
+        .hardware_addr(EthernetAddress::from_bytes(&mac_addr).into())
         .neighbor_cache(NeighborCache::new(neighbor_cache.as_mut_slice()))
         .routes(routes)
         .ip_addrs(ip_addrs.as_mut_slice())
@@ -63,6 +102,8 @@ fn main() -> ! {
         let tcp_tx_buffer = TcpSocketBuffer::new(tx_data);
         TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer)
     };
+
+    let timer = GlobalRollingTimer::default();
 
     let dhcp_socket = smoltcp::socket::Dhcpv4Socket::new();
     let server_handle = iface.add_socket(server_socket);
@@ -152,28 +193,6 @@ fn main() -> ! {
             socket.close();
             did_listen = false;
         }
-        // let rf = match gmac.read_frame() {
-        //     Some(f) => {
-        //         let fsl: &[u8] = f.deref();
-        //         // defmt::println!("Got Frame #{=u32}! Len: {=usize}, Data:", ctr, fsl.len());
-        //         // defmt::println!("{=[u8]:02X}", fsl);
-        //         ctr = ctr.wrapping_add(1);
-        //         f
-        //     }
-        //     None => continue,
-        // };
-
-        // let mut wf = match gmac.alloc_write_frame() {
-        //     Some(wf) => wf,
-        //     None => {
-        //         defmt::println!("Write alloc failed! Skipping response...");
-        //         continue;
-        //     }
-        // };
-
-        // // ...
-
-        // wf.send(rf.len());
     }
 }
 

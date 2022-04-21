@@ -2,11 +2,20 @@ use core::marker::PhantomData;
 use crate::pmc::Pmc;
 
 // PinModes
-pub struct Default;
+pub struct Gpio<T> {
+    _mode: T,
+}
+pub struct Unconfigured;
+pub struct Output;
 pub struct PeriphA;
 pub struct PeriphB;
 pub struct PeriphC;
 pub struct PeriphD;
+
+pub enum Level {
+    Low,
+    High,
+}
 
 pub struct Pio<PORT: sealed::Port> {
     periph: PORT,
@@ -19,6 +28,81 @@ pub struct PortToken<PORT: sealed::Port> {
 // NOTE: `PIN` must be 0..=31.
 pub struct Pin<PORT: sealed::Port, MODE, const PIN: u8> {
     pd: PhantomData<(PORT, MODE)>,
+}
+
+impl<PORT: sealed::Port, const PIN: u8> Pin<PORT, Gpio<Output>, PIN> {
+    pub fn set_low(&mut self) {
+        // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
+        let port = unsafe { &*PORT::PTR };
+        let pinmask = 1 << (PIN as u32);
+        port.pio_codr.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+    }
+
+    pub fn set_high(&mut self) {
+        // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
+        let port = unsafe { &*PORT::PTR };
+        let pinmask = 1 << (PIN as u32);
+        port.pio_sodr.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+    }
+}
+
+impl<PORT: sealed::Port, SUBMODE, const PIN: u8> Pin<PORT, Gpio<SUBMODE>, PIN> {
+    pub fn into_push_pull_output(self, initial_level: Level) -> Pin<PORT, Gpio<Output>, PIN> {
+
+        // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
+        let port = unsafe { &*PORT::PTR };
+        let pinmask = 1 << (PIN as u32);
+
+        // No need to touch pio_per, as we know the pin is already in GPIO (not Periph) mode
+
+        // Disable "Multi Drive" mode
+        port.pio_mddr.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+
+        // Disable Pull Up resistors
+        port.pio_pudr.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+
+        // Disable Pull Down resistors
+        port.pio_ppddr.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+
+        // Enable Output Write registers
+        port.pio_ower.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+
+        // Set initial output state as requested
+        // DON'T use ODSR, as that is not an atomic register!
+        match initial_level {
+            Level::Low => port.pio_codr.write(|w| unsafe {
+                w.bits(pinmask)
+            }),
+            Level::High => port.pio_sodr.write(|w| unsafe {
+                w.bits(pinmask)
+            }),
+        }
+
+        // TODO: We DON'T set the driver through PIO_DRIVER, as it is not
+        // atomic, and would require us to borrow the token back.
+        // For now, we never change that at all, so just leave it as-is
+
+        // Enable output mode
+        port.pio_oer.write(|w| unsafe {
+            w.bits(pinmask)
+        });
+
+        Pin {
+            pd: PhantomData,
+        }
+    }
 }
 
 impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
@@ -167,38 +251,38 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
 
 pub struct SplitPort<PORT: sealed::Port> {
     pub token: PortToken<PORT>,
-    pub p00: Pin<PORT, Default, 00>,
-    pub p01: Pin<PORT, Default, 01>,
-    pub p02: Pin<PORT, Default, 02>,
-    pub p03: Pin<PORT, Default, 03>,
-    pub p04: Pin<PORT, Default, 04>,
-    pub p05: Pin<PORT, Default, 05>,
-    pub p06: Pin<PORT, Default, 06>,
-    pub p07: Pin<PORT, Default, 07>,
-    pub p08: Pin<PORT, Default, 08>,
-    pub p09: Pin<PORT, Default, 09>,
-    pub p10: Pin<PORT, Default, 10>,
-    pub p11: Pin<PORT, Default, 11>,
-    pub p12: Pin<PORT, Default, 12>,
-    pub p13: Pin<PORT, Default, 13>,
-    pub p14: Pin<PORT, Default, 14>,
-    pub p15: Pin<PORT, Default, 15>,
-    pub p16: Pin<PORT, Default, 16>,
-    pub p17: Pin<PORT, Default, 17>,
-    pub p18: Pin<PORT, Default, 18>,
-    pub p19: Pin<PORT, Default, 19>,
-    pub p20: Pin<PORT, Default, 20>,
-    pub p21: Pin<PORT, Default, 21>,
-    pub p22: Pin<PORT, Default, 22>,
-    pub p23: Pin<PORT, Default, 23>,
-    pub p24: Pin<PORT, Default, 24>,
-    pub p25: Pin<PORT, Default, 25>,
-    pub p26: Pin<PORT, Default, 26>,
-    pub p27: Pin<PORT, Default, 27>,
-    pub p28: Pin<PORT, Default, 28>,
-    pub p29: Pin<PORT, Default, 29>,
-    pub p30: Pin<PORT, Default, 30>,
-    pub p31: Pin<PORT, Default, 31>,
+    pub p00: Pin<PORT, Gpio<Unconfigured>, 00>,
+    pub p01: Pin<PORT, Gpio<Unconfigured>, 01>,
+    pub p02: Pin<PORT, Gpio<Unconfigured>, 02>,
+    pub p03: Pin<PORT, Gpio<Unconfigured>, 03>,
+    pub p04: Pin<PORT, Gpio<Unconfigured>, 04>,
+    pub p05: Pin<PORT, Gpio<Unconfigured>, 05>,
+    pub p06: Pin<PORT, Gpio<Unconfigured>, 06>,
+    pub p07: Pin<PORT, Gpio<Unconfigured>, 07>,
+    pub p08: Pin<PORT, Gpio<Unconfigured>, 08>,
+    pub p09: Pin<PORT, Gpio<Unconfigured>, 09>,
+    pub p10: Pin<PORT, Gpio<Unconfigured>, 10>,
+    pub p11: Pin<PORT, Gpio<Unconfigured>, 11>,
+    pub p12: Pin<PORT, Gpio<Unconfigured>, 12>,
+    pub p13: Pin<PORT, Gpio<Unconfigured>, 13>,
+    pub p14: Pin<PORT, Gpio<Unconfigured>, 14>,
+    pub p15: Pin<PORT, Gpio<Unconfigured>, 15>,
+    pub p16: Pin<PORT, Gpio<Unconfigured>, 16>,
+    pub p17: Pin<PORT, Gpio<Unconfigured>, 17>,
+    pub p18: Pin<PORT, Gpio<Unconfigured>, 18>,
+    pub p19: Pin<PORT, Gpio<Unconfigured>, 19>,
+    pub p20: Pin<PORT, Gpio<Unconfigured>, 20>,
+    pub p21: Pin<PORT, Gpio<Unconfigured>, 21>,
+    pub p22: Pin<PORT, Gpio<Unconfigured>, 22>,
+    pub p23: Pin<PORT, Gpio<Unconfigured>, 23>,
+    pub p24: Pin<PORT, Gpio<Unconfigured>, 24>,
+    pub p25: Pin<PORT, Gpio<Unconfigured>, 25>,
+    pub p26: Pin<PORT, Gpio<Unconfigured>, 26>,
+    pub p27: Pin<PORT, Gpio<Unconfigured>, 27>,
+    pub p28: Pin<PORT, Gpio<Unconfigured>, 28>,
+    pub p29: Pin<PORT, Gpio<Unconfigured>, 29>,
+    pub p30: Pin<PORT, Gpio<Unconfigured>, 30>,
+    pub p31: Pin<PORT, Gpio<Unconfigured>, 31>,
 }
 
 impl<PORT> Pio<PORT>
@@ -216,6 +300,13 @@ where
 
     pub fn split(self) -> SplitPort<PORT> {
         // Configure all pins to an expected state.
+
+        // Disable port write protection
+        self.periph.pio_wpmr.modify(|_r, w| {
+            w.wpkey().passwd();
+            w.wpen().clear_bit();
+            w
+        });
 
         // Set all pins to GPIO/"PIO" mode (not peripheral mode)
         self.periph.pio_per.write(|w| unsafe {

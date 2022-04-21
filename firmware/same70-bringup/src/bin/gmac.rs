@@ -3,41 +3,81 @@
 
 use core::ops::Deref;
 
-use same70_bringup::{self as _, fixed_setup, hal, gmac::Gmac}; // global logger + panicking-behavior + memory layout
+use same70_bringup::efc::Efc;
+use same70_bringup::gmac::GmacPins;
+use same70_bringup::pio::Pio;
+use same70_bringup::pmc::{
+    ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
+    PeripheralIdentifier, Pmc,
+};
+use same70_bringup::wdt::Wdt;
 use same70_bringup::GlobalRollingTimer;
+use same70_bringup::{self as _, gmac::Gmac, hal}; // global logger + panicking-behavior + memory layout
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    defmt::println!("Blink!");
-
     // Obtain PAC-level access
     let board = hal::target_device::Peripherals::take().unwrap();
 
-    // Setup with general purpose settings
-    fixed_setup(&board);
+    let mut efc = Efc::new(board.EFC);
+    let mut pmc = Pmc::new(board.PMC);
+
+    let clk_cfg = ClockSettings {
+        main_clk_osc_src: MainClockOscillatorSource::MainCk12MHz,
+        mck_pres: MckPrescaler::CLK_1,
+        mck_src: MasterClockSource::PllaClock,
+        mck_div: MckDivider::PCK_DIV2, // 300MHz / 2 = 150MHz
+        multiplier_a: 24,              // (24 + 1) * 12 = 300MHz
+        divider_a: 1,                  // 300MHz / 1 = 300MHz
+    };
+
+    defmt::unwrap!(pmc.set_clocks(&mut efc, clk_cfg));
+
     GlobalRollingTimer::init(board.RTT);
-    // let timer = GlobalRollingTimer::default();
 
-    defmt::println!("Blankin.");
+    let mut wdt = Wdt::new(board.WDT);
+    wdt.disable();
 
-    defmt::println!("Creating GMAC...");
-    let mut gmac = unsafe { Gmac::new(board.GMAC) };
+    // TODO: This should *probably* move into HAL methods, once they exist.
+    // I'm not sure if any of these are actually used at the moment.
+    defmt::unwrap!(pmc.enable_peripherals(&[
+        PeripheralIdentifier::TC0_CHANNEL0,
+        PeripheralIdentifier::HSMCI,
+        PeripheralIdentifier::XDMAC,
+    ]));
 
-    defmt::println!("Initializing...");
-    gmac.init();
+    let piod_pins = defmt::unwrap!(Pio::new(board.PIOD, &mut pmc)).split();
+    let mut port_d_tok = piod_pins.token;
 
-    defmt::println!("MIIM setup...");
-    gmac.miim_post_setup();
-
-    // same70_bringup::exit();
+    let mut gmac = defmt::unwrap!(Gmac::new(
+        board.GMAC,
+        GmacPins {
+            gtxck: piod_pins.p00.into_periph_mode_a(&mut port_d_tok),
+            gtxen: piod_pins.p01.into_periph_mode_a(&mut port_d_tok),
+            gtx0: piod_pins.p02.into_periph_mode_a(&mut port_d_tok),
+            gtx1: piod_pins.p03.into_periph_mode_a(&mut port_d_tok),
+            grxdv: piod_pins.p04.into_periph_mode_a(&mut port_d_tok),
+            grx0: piod_pins.p05.into_periph_mode_a(&mut port_d_tok),
+            grx1: piod_pins.p06.into_periph_mode_a(&mut port_d_tok),
+            grxer: piod_pins.p07.into_periph_mode_a(&mut port_d_tok),
+            gmdc: piod_pins.p08.into_periph_mode_a(&mut port_d_tok),
+            gmdio: piod_pins.p09.into_periph_mode_a(&mut port_d_tok),
+        },
+        &mut pmc,
+        // 04:91:62:01:02:03
+        [0x04, 0x91, 0x62, 0x01, 0x02, 0x03],
+    ));
 
     defmt::println!("Polling...");
     let mut ctr: u32 = 0;
 
+    // This loop vaguely manually responds to ARP requests. This was an initial sign of life.
+    // You probably want to go look at the `smoltcp.rs` example to see how to use a real
+    // tcp stack.
     loop {
         let rf = match gmac.read_frame() {
             Some(f) => {
-                let fsl: &[u8] = f.deref();
+                let _fsl: &[u8] = f.deref();
                 // defmt::println!("Got Frame #{=u32}! Len: {=usize}, Data:", ctr, fsl.len());
                 // defmt::println!("{=[u8]:02X}", fsl);
                 ctr = ctr.wrapping_add(1);

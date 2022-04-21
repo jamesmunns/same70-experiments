@@ -1,55 +1,103 @@
 #![no_main]
 #![no_std]
 
-use core::marker::PhantomData;
-use core::ops::Deref;
-
 use cortex_m::singleton;
 use groundhog::RollingTimer;
-use same70_bringup::spi::{Spi0, SpiFreq, SelectedTarget};
-use same70_bringup::{self as _, fixed_setup, hal, gmac::Gmac}; // global logger + panicking-behavior + memory layout
-use same70_bringup::GlobalRollingTimer;
-use smoltcp::iface::{Neighbor, InterfaceBuilder, SocketStorage, NeighborCache, Routes, Route, Interface};
-use smoltcp::phy::{Device, RxToken, TxToken};
-use smoltcp::socket::{TcpSocketBuffer, TcpSocket, TcpState, Dhcpv4Event, Dhcpv4Socket};
-use smoltcp::time::Instant;
-use smoltcp::wire::{IpCidr, IpAddress, EthernetAddress, HardwareAddress, Ipv4Address, Ipv4Cidr};
+use same70_bringup::{
+    efc::Efc,
+    gmac::{Gmac, GmacPins},
+    hal::target_device::Peripherals,
+    pio::Pio,
+    pmc::{
+        ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
+        PeripheralIdentifier, Pmc,
+    },
+    spi::{SelectedTarget, Spi0, Spi0Pins, SpiFreq},
+    wdt::Wdt,
+    GlobalRollingTimer,
+}; // global logger + panicking-behavior + memory layout
+
+use smoltcp::{
+    iface::{Interface, InterfaceBuilder, Neighbor, NeighborCache, Route, Routes, SocketStorage},
+    phy::Device,
+    socket::{Dhcpv4Event, Dhcpv4Socket, TcpSocket, TcpSocketBuffer, TcpState},
+    time::Instant,
+    wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr},
+};
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    defmt::println!("Blink!");
-
     // Obtain PAC-level access
-    let board = hal::target_device::Peripherals::take().unwrap();
+    let board = Peripherals::take().unwrap();
 
-    // Setup with general purpose settings
-    fixed_setup(&board);
+    let mut efc = Efc::new(board.EFC);
+    let mut pmc = Pmc::new(board.PMC);
+
+    let clk_cfg = ClockSettings {
+        main_clk_osc_src: MainClockOscillatorSource::MainCk12MHz,
+        mck_pres: MckPrescaler::CLK_1,
+        mck_src: MasterClockSource::PllaClock,
+        mck_div: MckDivider::PCK_DIV2, // 300MHz / 2 = 150MHz
+        multiplier_a: 24,              // (24 + 1) * 12 = 300MHz
+        divider_a: 1,                  // 300MHz / 1 = 300MHz
+    };
+
+    defmt::unwrap!(pmc.set_clocks(&mut efc, clk_cfg));
+
     GlobalRollingTimer::init(board.RTT);
     let timer = GlobalRollingTimer::default();
 
-    let mut spi = Spi0::new(board.SPI0, SpiFreq::M10_0);
+    let mut wdt = Wdt::new(board.WDT);
+    wdt.disable();
 
-    defmt::println!("Blankin.");
+    // TODO: This should *probably* move into HAL methods, once they exist.
+    // I'm not sure if any of these are actually used at the moment.
+    defmt::unwrap!(pmc.enable_peripherals(&[
+        PeripheralIdentifier::TC0_CHANNEL0,
+        PeripheralIdentifier::HSMCI,
+        PeripheralIdentifier::XDMAC,
+    ]));
 
-    defmt::println!("Creating GMAC...");
-    let mut gmac = unsafe { Gmac::new(board.GMAC) };
+    let piod_pins = defmt::unwrap!(Pio::new(board.PIOD, &mut pmc)).split();
+    let mut port_d_tok = piod_pins.token;
 
-    defmt::println!("Initializing...");
-    gmac.init();
+    let spi_pins = Spi0Pins {
+        miso: piod_pins.p20.into_periph_mode_b(&mut port_d_tok),
+        mosi: piod_pins.p21.into_periph_mode_b(&mut port_d_tok),
+        spck: piod_pins.p22.into_periph_mode_b(&mut port_d_tok),
+        npcs1: piod_pins.p25.into_periph_mode_b(&mut port_d_tok),
+    };
+    let mut spi = defmt::unwrap!(Spi0::new(board.SPI0, SpiFreq::M10_0, spi_pins, &mut pmc,));
 
-    defmt::println!("MIIM setup...");
-    gmac.miim_post_setup();
-
-    // same70_bringup::exit();
-
-    defmt::println!("Polling...");
+    let gmac = defmt::unwrap!(Gmac::new(
+        board.GMAC,
+        GmacPins {
+            gtxck: piod_pins.p00.into_periph_mode_a(&mut port_d_tok),
+            gtxen: piod_pins.p01.into_periph_mode_a(&mut port_d_tok),
+            gtx0: piod_pins.p02.into_periph_mode_a(&mut port_d_tok),
+            gtx1: piod_pins.p03.into_periph_mode_a(&mut port_d_tok),
+            grxdv: piod_pins.p04.into_periph_mode_a(&mut port_d_tok),
+            grx0: piod_pins.p05.into_periph_mode_a(&mut port_d_tok),
+            grx1: piod_pins.p06.into_periph_mode_a(&mut port_d_tok),
+            grxer: piod_pins.p07.into_periph_mode_a(&mut port_d_tok),
+            gmdc: piod_pins.p08.into_periph_mode_a(&mut port_d_tok),
+            gmdio: piod_pins.p09.into_periph_mode_a(&mut port_d_tok),
+        },
+        &mut pmc,
+        // 04:91:62:01:02:03
+        [0x04, 0x91, 0x62, 0x01, 0x02, 0x03],
+    ));
 
     let ip_addrs: &'static mut _ = singleton!(: [IpCidr; 1] = [
         IpCidr::new(Ipv4Address::UNSPECIFIED.into(), 24),
-    ]).unwrap();
-    let neighbor_cache: &'static mut _ = singleton!(: [Option<(IpAddress, Neighbor)>; 8] = [None; 8]).unwrap();
-    let sockets: &'static mut _ = singleton!(: [SocketStorage<'static>; 8] = [SocketStorage::EMPTY; 8]).unwrap();
-    let routes_storage: &'static mut _ = singleton!(: [Option<(IpCidr, Route)>; 1] = [None; 1]).unwrap();
+    ])
+    .unwrap();
+    let neighbor_cache: &'static mut _ =
+        singleton!(: [Option<(IpAddress, Neighbor)>; 8] = [None; 8]).unwrap();
+    let sockets: &'static mut _ =
+        singleton!(: [SocketStorage<'static>; 8] = [SocketStorage::EMPTY; 8]).unwrap();
+    let routes_storage: &'static mut _ =
+        singleton!(: [Option<(IpCidr, Route)>; 1] = [None; 1]).unwrap();
     let routes = Routes::new(routes_storage.as_mut_slice());
 
     let mut iface = InterfaceBuilder::new(gmac, sockets.as_mut_slice())
@@ -84,10 +132,10 @@ fn main() -> ! {
 
         // TODO: This will roll over after 145 hours!
         match iface.poll(Instant::from_micros(timer.micros_since(start))) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 defmt::println!("Error: {:?}", e);
-            },
+            }
         }
 
         let event = iface.get_socket::<Dhcpv4Socket>(dhcp_handle).poll();
@@ -138,51 +186,28 @@ fn main() -> ! {
 
         let mut to_send = None;
         if socket.can_recv() {
-            socket.recv(|buffer| {
-                defmt::println!("RECV!");
-                defmt::println!("    len: {=usize}", buffer.len());
-                defmt::println!("    dat: {=[u8]}", buffer);
-                buf[..buffer.len()].copy_from_slice(buffer);
-                to_send = Some(&buf[..buffer.len()]);
-                (buffer.len(), ())
-            }).unwrap();
+            socket
+                .recv(|buffer| {
+                    defmt::println!("RECV!");
+                    defmt::println!("    len: {=usize}", buffer.len());
+                    defmt::println!("    dat: {=[u8]}", buffer);
+                    buf[..buffer.len()].copy_from_slice(buffer);
+                    to_send = Some(&buf[..buffer.len()]);
+                    (buffer.len(), ())
+                })
+                .unwrap();
         }
 
         if let Some(tx) = to_send {
             socket.send_slice(tx).unwrap();
-            spi.transfer_basic(
-                SelectedTarget::Target1,
-                tx,
-                &mut buf2[..tx.len()],
-            ).unwrap();
+            spi.transfer_basic(SelectedTarget::Target1, tx, &mut buf2[..tx.len()])
+                .unwrap();
         }
 
         if let TcpState::CloseWait = state {
             socket.close();
             did_listen = false;
         }
-        // let rf = match gmac.read_frame() {
-        //     Some(f) => {
-        //         let fsl: &[u8] = f.deref();
-        //         // defmt::println!("Got Frame #{=u32}! Len: {=usize}, Data:", ctr, fsl.len());
-        //         // defmt::println!("{=[u8]:02X}", fsl);
-        //         ctr = ctr.wrapping_add(1);
-        //         f
-        //     }
-        //     None => continue,
-        // };
-
-        // let mut wf = match gmac.alloc_write_frame() {
-        //     Some(wf) => wf,
-        //     None => {
-        //         defmt::println!("Write alloc failed! Skipping response...");
-        //         continue;
-        //     }
-        // };
-
-        // // ...
-
-        // wf.send(rf.len());
     }
 }
 
