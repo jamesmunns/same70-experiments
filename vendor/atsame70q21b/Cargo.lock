@@ -3,15 +3,6 @@
 version = 3
 
 [[package]]
-name = "atsame70q21b"
-version = "0.21.0"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "vcell",
-]
-
-[[package]]
 name = "bare-metal"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -82,6 +73,15 @@ name = "nb"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "546c37ac5d9e56f55e73b677106873d9d9f5190605e41a856503623648488cae"
+
+[[package]]
+name = "ovl-atsame70q21b"
+version = "0.21.0"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
+ "vcell",
+]
 
 [[package]]
 name = "proc-macro2"

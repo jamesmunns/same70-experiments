@@ -8,8 +8,6 @@ compile_error!(
     "The HAL is built for a specific target device selected using a feature, but no such a feature was selected."
 );
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
 #[cfg(feature = "same70j19")]
 pub use atsame70j19 as target_device;
 #[cfg(feature = "same70j19b")]
@@ -109,82 +107,6 @@ pub mod pio;
 pub mod pmc;
 pub mod spi;
 pub mod wdt;
-use groundhog::RollingTimer;
+pub mod rtt;
 
-static IS_GRT_INIT: AtomicBool = AtomicBool::new(false);
-const TICK_SCALER: u32 = 4;
-
-pub struct GlobalRollingTimer {}
-
-impl Default for GlobalRollingTimer {
-    fn default() -> Self {
-        GlobalRollingTimer {}
-    }
-}
-
-impl Clone for GlobalRollingTimer {
-    fn clone(&self) -> Self {
-        Self::default()
-    }
-}
-
-impl GlobalRollingTimer {
-    pub fn init(rtt: target_device::RTT) {
-        rtt.rtt_mr.modify(|_r, w| {
-            // Feed from 32khz prescaled val
-            w.rtc1hz().clear_bit();
-
-            // Enable
-            w.rttdis().clear_bit();
-
-            // Reset value
-            w.rttrst().set_bit();
-
-            // No interrupt
-            w.rttincien().clear_bit();
-
-            // No alarm
-            w.almien().clear_bit();
-
-            unsafe {
-                // Set prescaler to four. We could use three, but four gives us an even
-                // number of ticks per second. This gives a minimum resolution of ~122uS,
-                // and a maximum range of ~145 hours
-                w.rtpres().bits(TICK_SCALER as u16);
-            }
-
-            w
-        });
-
-        IS_GRT_INIT.store(true, Ordering::SeqCst);
-    }
-}
-
-impl RollingTimer for GlobalRollingTimer {
-    type Tick = u32;
-
-    const TICKS_PER_SECOND: Self::Tick = (32_768 / TICK_SCALER);
-
-    fn get_ticks(&self) -> Self::Tick {
-        if !self.is_initialized() {
-            return 0;
-        }
-        let rtt = unsafe { &*target_device::RTT::ptr() };
-
-        let mut last = rtt.rtt_vr.read().bits();
-
-        // This value is susceptible to read tearing. Read in a loop
-        // to check that values match.
-        loop {
-            let new = rtt.rtt_vr.read().bits();
-            if last == new {
-                return last;
-            }
-            last = new;
-        }
-    }
-
-    fn is_initialized(&self) -> bool {
-        IS_GRT_INIT.load(Ordering::SeqCst)
-    }
-}
+pub use rtt::GlobalRollingTimer;

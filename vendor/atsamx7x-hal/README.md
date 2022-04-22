@@ -14,3 +14,6 @@ At the moment this HAL crate supports only revision **B** of SVD files and futur
 
 [BSD Zero Clause License](https://choosealicense.com/licenses/0bsd/)
 
+## Provenance
+
+Developed by OneVariable UG, with development sponsored by [Shenberger Technology](https://shenbergertech.com/).

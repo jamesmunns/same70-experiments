@@ -37,6 +37,9 @@ board.PIOD.pio_per.write(|w| unsafe { w.bits(!0x0000_03FF) });
 
 use core::num::NonZeroU8;
 
+use groundhog::RollingTimer;
+
+use crate::GlobalRollingTimer;
 use crate::target_device::{PIOD, SPI0};
 
 use crate::{
@@ -159,13 +162,22 @@ impl Spi0 {
     ) -> Result<Self, ()> {
         // TODO: For now all the "baud divisor" math assumes an MCLK of
         // 150MHz. Update that code before removing this check!
+        defmt::println!("Check baud...");
         {
             let settings = pmc.settings().ok_or(())?;
+            defmt::println!("Got settings...");
             let mclk = settings.calc_master_clk_mhz().map_err(drop)?;
+            defmt::println!("Baud: {=u8}", mclk);
+            let timer = GlobalRollingTimer::default();
+            let start = timer.get_ticks();
+            while timer.millis_since(start) < 500 {}
             if mclk != 150 {
+                defmt::println!("mclk: {=u8}", mclk);
                 return Err(());
             }
         }
+
+        defmt::println!("Enable Periph...");
 
         // Enable the SPI0 peripheral
         pmc.enable_peripherals(&[PeripheralIdentifier::SPI0])
@@ -240,6 +252,8 @@ impl Spi0 {
             w.spien().set_bit();
             w
         });
+
+        defmt::println!("Done!");
 
         Ok(Self {
             periph: spi0,
