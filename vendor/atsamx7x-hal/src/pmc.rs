@@ -84,7 +84,7 @@ impl ClockSettings {
                     return Err(PmcError::InvalidConfiguration);
                 }
 
-                let plla_ck = main_ck * (self.multiplier_a as f32);
+                let plla_ck = main_ck * ((self.multiplier_a + 1) as f32);
                 let plla_ck = plla_ck / (self.divider_a as f32);
 
                 plla_ck
@@ -227,7 +227,7 @@ impl Pmc {
         //
         // The flash controller (EEFC) is driven from the master clock (stated in section 31.2)
         let mck_new = cfg.calc_master_clk_mhz()?;
-        let fws = FlashWaitStates::from_pclk_mhz(mck_new)?;
+        let fws = FlashWaitStates::from_mck_mhz(mck_new)?;
 
         efc.periph.eefc_wpmr.modify(|_r, w| {
             w.wpkey().passwd();
@@ -357,6 +357,7 @@ impl Pmc {
         // information, see "Clock Switching Waveforms".
         //
         // MCK is MAINCK divided by 2.
+        self.settings = Some(cfg);
         Ok(())
     }
 }

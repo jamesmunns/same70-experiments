@@ -42,13 +42,13 @@ pub enum FlashWaitStates {
 
 impl FlashWaitStates {
     /// Calculate the lowest possible number of flash wait states from a given
-    /// peripheral clock frequency in MHz.
+    /// master clock frequency in MHz.
     ///
-    /// The max PCLK frequency supported is 150MHz. This is *not* the CPU frequency,
+    /// The max mck frequency supported is 150MHz. This is *not* the CPU frequency,
     /// which may go up to 300MHz.
     ///
     /// Note: This is probably only valid at VDDIO = 3.0V
-    pub fn from_pclk_mhz(freq: u8) -> Result<Self, PmcError> {
+    pub fn from_mck_mhz(freq: u8) -> Result<Self, PmcError> {
         // Reference: Table 58-51 Embedded Flash Wait States for Worst-Case Conditions
         let fws = match freq {
             0..=23 => Self::Zero,
