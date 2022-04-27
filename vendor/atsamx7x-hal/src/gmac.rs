@@ -96,6 +96,7 @@ impl<'a> TxToken for GmacTxToken<'a> {
         let res = f(&mut tf[..len]);
         defmt::trace!("TX: {=[u8]:02X}", &tf[..len]);
         tf.send(len);
+        defmt::println!("[GMAC] SENT FRAME");
         res
     }
 }
@@ -106,6 +107,7 @@ impl<'a> Device<'a> for Gmac {
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
         let rxf = self.read_frame()?;
+        defmt::println!("[GMAC] GOT FRAME");
         Some((
             GmacRxToken {
                 rf: rxf,
@@ -129,7 +131,7 @@ impl<'a> Device<'a> for Gmac {
         cksm.ipv4 = Checksum::None;
         cksm.tcp = Checksum::None;
         cksm.udp = Checksum::None;
-        cksm.icmpv4 = Checksum::None;
+        cksm.icmpv4 = Checksum::Tx;
 
         capa.checksum = cksm;
         capa
@@ -239,6 +241,12 @@ impl WriteFrame {
         // yolo
         {
             let gmac = &*GMAC::ptr();
+            gmac.gmac_tsr.modify(|r, w| {
+                if r.ubr().bit_is_set() {
+                    w.ubr().set_bit();
+                }
+                w
+            });
             gmac.gmac_ncr.modify(|_r, w| w.tstart().set_bit());
         }
     }
@@ -277,6 +285,15 @@ impl Gmac {
 
     pub fn query(&mut self) {
         // Query TSR
+
+        // TODO: Workaround - For some reason, one kick of the tstart
+        // field is not enough, and leaves packets in the outgoing
+        // queue, causing long delays and retries.
+        //
+        // For now, smack it continuously, which is probably not the
+        // *right* to do, but gee it makes the latency low!
+        self.periph.gmac_ncr.modify(|_r, w| w.tstart().set_bit());
+
         self.periph.gmac_tsr.modify(|r, w| {
             if r.hresp().bit_is_set() {
                 defmt::error!("[TSR]: HRESP Not OK");
@@ -310,7 +327,11 @@ impl Gmac {
             }
 
             if r.ubr().bit_is_set() {
-                defmt::warn!("[TSR]: Used Bit Read");
+                // TODO: Because of the above TSTART workaround, this bit gets set
+                // on basically every query, flooding the logs. Re-enable this
+                // once the above workaround is removed.
+                //
+                // defmt::warn!("[TSR]: Used Bit Read");
                 w.ubr().set_bit();
             }
 
@@ -391,6 +412,10 @@ impl Gmac {
             let w0 = desc.get_word_0();
             let addr = w0 & 0xFFFF_FFFC;
             let ready = (w0 & 0x0000_0001) != 0;
+
+            if ready && (addr == 0) {
+                defmt::println!("!!! WHAT?");
+            }
 
             if ready && (addr != 0) {
                 // Erase address, but leave 'ready' and potentially 'last' bit set.
@@ -502,7 +527,7 @@ impl Gmac {
 
         defmt::println!("Reset PHY...");
 
-        self.miim_write_data(0, 0x8000); // 0.15: Software reset
+        self.miim_write_data(0, 0b1000_0000_0000_0000); // 0.15: Software reset
         let start = timer.get_ticks();
 
         // TODO: How long SHOULD this be?
@@ -521,6 +546,7 @@ impl Gmac {
             self.miim_start_read(1);
             while self.miim_is_busy() {}
             let val = self.miim_read_data_get();
+            // 0b0000_0000_0000_0100
             if (val & 0x0004) != 0 {
                 defmt::println!("Link up!");
                 break;
@@ -530,6 +556,7 @@ impl Gmac {
         self.miim_mgmt_port_disable();
     }
 
+    // TODO(AJM): Add docs
     fn init(&mut self) {
         // Based on DRV_PIC32CGMAC_LibInit
         // //disable Tx

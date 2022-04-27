@@ -52,7 +52,10 @@ pub struct Spi0Pins {
     pub miso: Pin<PIOD, PeriphB, 20>,
     pub mosi: Pin<PIOD, PeriphB, 21>,
     pub spck: Pin<PIOD, PeriphB, 22>,
+    // TODO: npcs0
     pub npcs1: Pin<PIOD, PeriphB, 25>,
+    // TODO: npcs2
+    // TODO: npcs3
 }
 
 // This could be made generic, but hasn't yet been.
@@ -262,6 +265,14 @@ impl Spi0 {
         })
     }
 
+
+    // out: &[0x01, 0x02, 0x00, 0x00, 0x00, 0x00]
+    // in:  &mut [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+    // out: &[0x01, 0x02, 0x00, 0x00, 0x00, 0x00]
+    // in:  &mut [0x00, 0x00, 0x10, 0x20, 0x30, 0x40]
+
+    // TODO (AJM): Add API for changing SPI frequency scaler
     pub fn transfer_basic(
         &mut self,
         target: SelectedTarget,

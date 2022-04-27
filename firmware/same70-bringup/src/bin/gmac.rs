@@ -4,8 +4,9 @@
 use core::ops::Deref;
 
 use same70_bringup::hal::{
+    self as _, // global logger + panicking-behavior + memory layout
     efc::Efc,
-    gmac::{GmacPins, Gmac},
+    gmac::{Gmac, GmacPins},
     pio::Pio,
     pmc::{
         ClockSettings, MainClockOscillatorSource, MasterClockSource, MckDivider, MckPrescaler,
@@ -14,7 +15,6 @@ use same70_bringup::hal::{
     target_device::Peripherals,
     wdt::Wdt,
     GlobalRollingTimer,
-    self as _, // global logger + panicking-behavior + memory layout
 };
 
 #[cortex_m_rt::entry]

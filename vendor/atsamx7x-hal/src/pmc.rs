@@ -21,12 +21,13 @@ pub enum PmcError {
 /// The selected "Main Clock Oscillator" source
 ///
 /// TODO/NOTE: At the moment, we only support the internal trimmed 12MHz
-/// oscillator. Some driver behavior is hardcoded on this assumption for
-/// the sake of simplicity.
+/// oscillator OR an external 12MHz oscillator. Some driver behavior is
+// hardcoded on this assumption for the sake of simplicity.
 ///
 /// This corresponds to CKGR_MOR.MOSCSEL
 pub enum MainClockOscillatorSource {
-    MainCk12MHz,
+    MainRCOscInternal12MHz,
+    MainCrystalOscExternal12MHz
 }
 
 /// The selected "Master Clock" source
@@ -76,7 +77,8 @@ impl ClockSettings {
             MasterClockSource::PllaClock => {
                 // The internal 12MHz osc is currently the (only) choice for driving the PLLACK
                 let main_ck: f32 = match self.main_clk_osc_src {
-                    MainClockOscillatorSource::MainCk12MHz => 12.0,
+                    MainClockOscillatorSource::MainRCOscInternal12MHz => 12.0,
+                    MainClockOscillatorSource::MainCrystalOscExternal12MHz => 12.0,
                 };
 
                 // These values disable the PLLA
@@ -240,16 +242,86 @@ impl Pmc {
 
         // Note: This follows Datasheet 31.17 "Recommendeded Programming Sequence"
         //
-        // Steps 1-5 skipped, using the internal osc
-
-        // The Main RC oscillator. Three output frequencies can be selected: 4/8/12 MHz. By default 12 MHz is
-        // selected. 8 MHz and 12 MHz are factory-trimmed. The Main RC Oscillator is the default choice, and
-        // requires no further configuration.
+        // # Step 1
         //
-        // TODO: This is the only supported variant. This code will fail if we add another option.
-        // You should implement the logic of steps 1-5 here if you are adding more MCO source
-        // options to the public interface!
-        let MainClockOscillatorSource::MainCk12MHz = cfg.main_clk_osc_src;
+        // If the Main crystal oscillator is not required, the PLL and divider can be directly configured (Step 6.)
+        // else this oscillator must be started (Step 2.).
+        match cfg.main_clk_osc_src {
+            MainClockOscillatorSource::MainRCOscInternal12MHz => {
+                // The Main RC oscillator. Three output frequencies can be selected: 4/8/12 MHz. By default 12 MHz is
+                // selected. 8 MHz and 12 MHz are factory-trimmed. The Main RC Oscillator is the default choice, and
+                // requires no further configuration.
+                //
+                // NOTE: Only 12MHz mode is currently supported.
+            },
+            MainClockOscillatorSource::MainCrystalOscExternal12MHz => {
+                // # Step 2
+                //
+                // Enable the Main crystal oscillator by setting CKGR_MOR.MOSCXTEN. The user can define a
+                // startup time. This can be done by configuring the appropriate value in CKGR_MOR.MOSCXTST.
+                // Once this register has been correctly configured, the user must wait for PMC_SR.MOSCXTS to be
+                // set. This can be done either by polling PMC_SR.MOSCXTS, or by waiting for the interrupt line to
+                // be raised if the associated interrupt source (MOSCXTS) has been enabled in PMC_IER
+                //
+                // Note: When the crystal oscillator bypass is disabled (MOSCXTBY = 0), the MOSCXTS flag
+                // must be read at ‘0’ in PMC_SR before enabling the crystal oscillator (MOSCXTEN = 1).
+                if self.periph.pmc_sr.read().moscxts().bit_is_set() {
+                    defmt::println!("Crystal Oscillator already stabilized?");
+                    return Err(PmcError::InternalError);
+                }
+                self.periph.ckgr_mor.modify(|_r, w| {
+                    unsafe {
+                        // TODO: Can we wait less than the max time for this?
+                        //
+                        // This might be (partially) the cause of defmt detaching when using the
+                        // external clock.
+                        w.moscxtst().bits(0xFF);
+                    }
+                    w.moscxtby().clear_bit();
+                    w.moscxten().set_bit();
+                    w.key().passwd();
+                    w
+                });
+                while self.periph.pmc_sr.read().moscxts().bit_is_clear() {}
+
+                // # Step 3
+                //
+                // Switch MAINCK to the Main crystal oscillator by setting CKGR_MOR.MOSCSEL.
+                self.periph.ckgr_mor.modify(|_r, w| {
+                    w.key().passwd();
+                    w.moscsel().set_bit();
+                    w
+                });
+
+                // # Step 4
+                //
+                // Wait for PMC_SR.MOSCSELS to be set to ensure the switch is complete.
+                while self.periph.pmc_sr.read().moscsels().bit_is_clear() {}
+
+                // # Step 5
+                //
+                // Check MAINCK frequency:
+                // This frequency can be measured via CKGR_MCFR.
+                //
+                // Read CKGR_MCFR until the MAINFRDY field is set, after which the user can read
+                // CKGR_MCFR.MAINF by performing an additional read. This provides the number of Main clock
+                // cycles that have been counted during a period of 16 SLCK cycles.
+                while self.periph.ckgr_mcfr.read().mainfrdy().bit_is_clear() {}
+                let mainf = self.periph.ckgr_mcfr.read().mainf().bits();
+
+                // If MAINF = 0, switch MAINCK to the Main RC Oscillator by clearing CKGR_MOR.MOSCSEL. If
+                // MAINF ≠ 0, proceed to Step 6.
+                if mainf == 0 {
+                    defmt::println!("Error locking clock!");
+                    self.periph.ckgr_mor.modify(|_r, w| {
+                        w.moscsel().clear_bit();
+                        w.key().passwd();
+                        w
+                    });
+                    return Err(PmcError::InternalError);
+                }
+            },
+        }
 
         // # Step 6
         //
