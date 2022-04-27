@@ -2,7 +2,7 @@ use core::{
     cell::UnsafeCell,
     marker::PhantomData,
     ops::{Deref, DerefMut},
-    ptr::NonNull,
+    ptr::NonNull, sync::atomic::{fence, Ordering, compiler_fence},
 };
 
 use crate::target_device::{GMAC, PIOD};
@@ -220,6 +220,8 @@ impl Drop for ReadFrame {
 
 impl WriteFrame {
     unsafe fn dropper(&mut self, len: usize) {
+        compiler_fence(Ordering::SeqCst);
+
         let desc = { self.desc.as_ref() };
         let old_w1 = desc.get_word_1();
         let wrap_bit = old_w1 & 0x4000_0000;
@@ -238,15 +240,11 @@ impl WriteFrame {
         desc.set_word_1(new_w1);
         self.was_sent = true;
 
+        fence(Ordering::SeqCst);
+
         // yolo
         {
             let gmac = &*GMAC::ptr();
-            gmac.gmac_tsr.modify(|r, w| {
-                if r.ubr().bit_is_set() {
-                    w.ubr().set_bit();
-                }
-                w
-            });
             gmac.gmac_ncr.modify(|_r, w| w.tstart().set_bit());
         }
     }
@@ -285,15 +283,6 @@ impl Gmac {
 
     pub fn query(&mut self) {
         // Query TSR
-
-        // TODO: Workaround - For some reason, one kick of the tstart
-        // field is not enough, and leaves packets in the outgoing
-        // queue, causing long delays and retries.
-        //
-        // For now, smack it continuously, which is probably not the
-        // *right* to do, but gee it makes the latency low!
-        self.periph.gmac_ncr.modify(|_r, w| w.tstart().set_bit());
-
         self.periph.gmac_tsr.modify(|r, w| {
             if r.hresp().bit_is_set() {
                 defmt::error!("[TSR]: HRESP Not OK");
@@ -327,11 +316,6 @@ impl Gmac {
             }
 
             if r.ubr().bit_is_set() {
-                // TODO: Because of the above TSTART workaround, this bit gets set
-                // on basically every query, flooding the logs. Re-enable this
-                // once the above workaround is removed.
-                //
-                // defmt::warn!("[TSR]: Used Bit Read");
                 w.ubr().set_bit();
             }
 
