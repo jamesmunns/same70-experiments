@@ -1,11 +1,18 @@
+//! Embedded Flash Controller
+//!
+//! At the moment, this module has limited support, particularly
+//! setting the number of flash wait states.
+
 use crate::target_device::EFC;
 use crate::pmc::PmcError;
 
+/// Embedded Flash Controller HAL interface
 pub struct Efc {
     pub(crate) periph: EFC,
 }
 
 impl Efc {
+    /// Create a new HAL EFC struct, from the PAC EFC structure
     pub fn new(periph: EFC) -> Self {
         periph.eefc_wpmr.modify(|_r, w| {
             w.wpkey().passwd();
@@ -16,6 +23,10 @@ impl Efc {
         Self { periph }
     }
 
+    /// Set the number of flash wait states, from zero to six.
+    ///
+    /// See [from_mck_mhz()](FlashWaitStates::from_mck_mhz()) for more
+    /// details.
     pub fn set_wait_states(&mut self, fws: FlashWaitStates) {
         let fws_bits = fws as u8;
 

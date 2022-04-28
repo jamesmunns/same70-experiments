@@ -1,3 +1,11 @@
+/// Real Time Timer peripheral
+///
+/// This peripheral is hardcoded to tick a 32-bit timer at 8192Hz.
+/// The resulting clock is used for general timing and rtic::Monotonic
+/// purposes.
+///
+/// This timer will roll over approximately every 145 hours.
+
 use core::sync::atomic::{AtomicBool, Ordering};
 use groundhog::RollingTimer;
 use crate::target_device::{RTT, rtt::RegisterBlock};
@@ -11,6 +19,7 @@ impl Rtt {
     pub const TICK_SCALER: u32 = 4;
     pub const TICKS_PER_SEC: u32 = 32_768 / Rtt::TICK_SCALER;
 
+    /// Create and start the RTT at the fixed frequency
     pub fn new(periph: RTT) -> Self {
         periph.rtt_mr.modify(|_r, w| {
             // Feed from 32khz prescaled val
@@ -46,10 +55,12 @@ impl Rtt {
         }
     }
 
+    /// Get the current 8192Hz tick since start (or last rollover)
     pub fn get_tick(&self) -> u32 {
         get_cur_tick(&self.periph)
     }
 
+    /// Enable the ALARM interrupt to trigger at the requested tick.
     pub fn set_alarm_int(&mut self, tick: u32) {
         // Disable interrupt before changing alarm
         self.periph.rtt_mr.modify(|_r, w| {
@@ -74,6 +85,7 @@ impl Rtt {
         });
     }
 
+    /// Disable the alarm interrupt, and clear the alarm status flag
     pub fn clear_disable_alarm_int(&mut self) {
         // Disable interrupt
         self.periph.rtt_mr.modify(|_r, w| {

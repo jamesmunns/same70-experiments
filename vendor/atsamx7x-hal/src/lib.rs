@@ -1,3 +1,5 @@
+//! The OneVariable Labs ATSAME70 HAL
+
 #![no_std]
 
 extern crate embedded_hal as hal;

@@ -1,36 +1,61 @@
+//! PIO - GPIO configuration and functionality
+//!
+//! At the moment, this module has limited support to allow for basic
+//! ethernet, SPI, and GPIO output capabilities.
+
 use crate::pmc::Pmc;
 use core::marker::PhantomData;
 
-// PinModes
+/// A marker struct representing "GPIO" (rather than "Peripheral") mode.
 pub struct Gpio<T> {
     _mode: T,
 }
+
+/// A marker struct representing a default/unconfigured mode.
 pub struct Unconfigured;
+
+/// A marker struct representing a GPIO in the Output mode.
 pub struct Output;
+
+/// A marker struct representing a pin the the Peripheral A mode.
 pub struct PeriphA;
+/// A marker struct representing a pin the the Peripheral B mode.
 pub struct PeriphB;
+/// A marker struct representing a pin the the Peripheral C mode.
 pub struct PeriphC;
+/// A marker struct representing a pin the the Peripheral D mode.
 pub struct PeriphD;
 
+/// The output level of a GPIO.
+///
+/// Low corresponds to GND, High represents VCC
 pub enum Level {
     Low,
     High,
 }
 
+/// A PIO port, representing ownership of all 32 pins of the port
 pub struct Pio<PORT: sealed::Port> {
     periph: PORT,
 }
 
+/// A token representing access to the port configuration registers.
+///
+/// This is used at runtime to ensure pin configuration only occurs
+/// in a mutually exclusive ("change one pin at a time") manner to
+/// avoid data races.
 pub struct PortToken<PORT: sealed::Port> {
     pd: PhantomData<PORT>,
 }
 
+/// A single GPIO Pin
 // NOTE: `PIN` must be 0..=31.
 pub struct Pin<PORT: sealed::Port, MODE, const PIN: u8> {
     pd: PhantomData<(PORT, MODE)>,
 }
 
 impl<PORT: sealed::Port, const PIN: u8> Pin<PORT, Gpio<Output>, PIN> {
+    /// Set the GPIO pin to the low output state
     pub fn set_low(&mut self) {
         // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
         let port = unsafe { &*PORT::PTR };
@@ -38,6 +63,7 @@ impl<PORT: sealed::Port, const PIN: u8> Pin<PORT, Gpio<Output>, PIN> {
         port.pio_codr.write(|w| unsafe { w.bits(pinmask) });
     }
 
+    /// Set the GPIO pin to the high output state
     pub fn set_high(&mut self) {
         // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
         let port = unsafe { &*PORT::PTR };
@@ -47,6 +73,7 @@ impl<PORT: sealed::Port, const PIN: u8> Pin<PORT, Gpio<Output>, PIN> {
 }
 
 impl<PORT: sealed::Port, SUBMODE, const PIN: u8> Pin<PORT, Gpio<SUBMODE>, PIN> {
+    /// Convert the pin into a push pull output mode
     pub fn into_push_pull_output(self, initial_level: Level) -> Pin<PORT, Gpio<Output>, PIN> {
         // SAFETY: We only use atomic enable/disable operations here, and only on our one given pin.
         let port = unsafe { &*PORT::PTR };
@@ -90,6 +117,7 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         Self { pd: PhantomData }
     }
 
+    /// Convert the pin into Peripheral Mode A.
     // TODO: We could also achieve safety here by using a critical sectiom
     pub fn into_periph_mode_a(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphA, PIN> {
         // SAFETY: By having an exclusive ref to the PortToken, we know we have
@@ -121,6 +149,7 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         Pin { pd: PhantomData }
     }
 
+    /// Convert the pin into Peripheral Mode B.
     pub fn into_periph_mode_b(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphB, PIN> {
         // SAFETY: By having an exclusive ref to the PortToken, we know we have
         // exclusive access to the port configuration registers, avoiding a race on
@@ -151,6 +180,7 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         Pin { pd: PhantomData }
     }
 
+    /// Convert the pin into Peripheral Mode C.
     pub fn into_periph_mode_c(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphC, PIN> {
         // SAFETY: By having an exclusive ref to the PortToken, we know we have
         // exclusive access to the port configuration registers, avoiding a race on
@@ -181,6 +211,7 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
         Pin { pd: PhantomData }
     }
 
+    /// Convert the pin into Peripheral Mode D.
     pub fn into_periph_mode_d(self, _port_tok: &mut PortToken<PORT>) -> Pin<PORT, PeriphD, PIN> {
         // SAFETY: By having an exclusive ref to the PortToken, we know we have
         // exclusive access to the port configuration registers, avoiding a race on
@@ -212,6 +243,8 @@ impl<PORT: sealed::Port, MODE, const PIN: u8> Pin<PORT, MODE, PIN> {
     }
 }
 
+/// A structure containing all 32 pins of the port, as well as a token
+/// that can be used for reconfiguration of each pin at a later time.
 pub struct SplitPort<PORT: sealed::Port> {
     pub token: PortToken<PORT>,
     pub p00: Pin<PORT, Gpio<Unconfigured>, 00>,
@@ -252,6 +285,9 @@ impl<PORT> Pio<PORT>
 where
     PORT: sealed::Port,
 {
+    /// Create a HAL representation for the given port.
+    ///
+    /// Also enabled the PMC clocks for the given port.
     pub fn new(periph: PORT, pmc: &mut Pmc) -> Result<Self, ()> {
         // Should be impossible, but okay.
         pmc.enable_peripherals(&[PORT::PID]).map_err(drop)?;
@@ -259,6 +295,7 @@ where
         Ok(Self { periph })
     }
 
+    /// Split the port into Pins.
     pub fn split(self) -> SplitPort<PORT> {
         // Configure all pins to an expected state.
 

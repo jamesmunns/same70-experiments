@@ -1,3 +1,9 @@
+//! GMAC Ethernet Peripheral
+//!
+//! At the moment, this module has limited support to allow for basic
+//! ethernet functionality, with integration for the `smoltcp` TCP/IP
+//! network stack
+
 use core::{
     cell::UnsafeCell,
     marker::PhantomData,
@@ -46,9 +52,11 @@ static TX_BUFS: [TxBuffer; NUM_TX_BUFS] = [TX_BUF_DEFAULT; NUM_TX_BUFS];
 
 static UNUSED_TX_BUF_DESC: TxBufferDescriptor = TX_BUF_DESC_DEFAULT;
 
-// TODO: This should probably be replaced with a struct with a lot of generics,
-// or some other way. For now, support a single fixed pin mapping option
-// (PRs welcome!)
+/// Pins mapped to the GMAC peripheral functionality
+//
+//. TODO: This should probably be replaced with a struct with a lot of generics,
+//. or some other way. For now, support a single fixed pin mapping option
+//. (PRs welcome!)
 pub struct GmacPins {
     pub gtxck: Pin<PIOD, PeriphA, 00>,
     pub gtxen: Pin<PIOD, PeriphA, 01>,
@@ -62,12 +70,10 @@ pub struct GmacPins {
     pub gmdio: Pin<PIOD, PeriphA, 09>,
 }
 
+/// A smoltcp token representing a received ethernet frame
 pub struct GmacRxToken<'a> {
     rf: ReadFrame,
     _plt: PhantomData<&'a ()>,
-}
-pub struct GmacTxToken<'a> {
-    gmac: &'a mut Gmac,
 }
 
 impl<'a> RxToken for GmacRxToken<'a> {
@@ -75,10 +81,16 @@ impl<'a> RxToken for GmacRxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
-        // defmt::println!("RxCons: {=u32:08X}", timestamp.total_millis() as u32);
-        defmt::trace!("RX: {=[u8]:02X}", &self.rf);
+        defmt::trace!("[GMAC]: RX: {=[u8]:02X}", &self.rf);
         f(self.rf.deref_mut())
     }
+}
+
+
+/// A smoltcp token representing the capability to send an
+/// ethernet frame
+pub struct GmacTxToken<'a> {
+    gmac: &'a mut Gmac,
 }
 
 impl<'a> TxToken for GmacTxToken<'a> {
@@ -91,16 +103,17 @@ impl<'a> TxToken for GmacTxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
-        // defmt::println!("TxCons: {=u32:08X}", timestamp.total_millis() as u32);
         let mut tf = self.gmac.alloc_write_frame().unwrap();
         let res = f(&mut tf[..len]);
         defmt::trace!("TX: {=[u8]:02X}", &tf[..len]);
         tf.send(len);
-        defmt::println!("[GMAC] SENT FRAME");
+        defmt::info!("[GMAC] SENT FRAME");
         res
     }
 }
 
+/// An implemntation of the smotcp `Device` trait. This allows us
+/// to use the GMAC struct with the smoltcp stack.
 impl<'a> Device<'a> for Gmac {
     type RxToken = GmacRxToken<'a>;
     type TxToken = GmacTxToken<'a>;
@@ -138,6 +151,10 @@ impl<'a> Device<'a> for Gmac {
     }
 }
 
+/// The GMAC peripheral HAL interface
+///
+/// This interface also implements the smoltcp Device trait, allowing
+/// it to be used with the smoltcp TCP/IP stack.
 pub struct Gmac {
     periph: GMAC,
     next_tx_idx: usize,
@@ -148,25 +165,15 @@ pub struct Gmac {
     mac_addr: [u8; 6],
 }
 
+/// A received ethernet frame
+///
+/// This represents a position in the hardware-based frame buffer. It should
+/// be used and dropped as soon as reasonably possible, in order to free up
+/// space to receive additional frames.
 pub struct ReadFrame {
     bufr: NonNull<[u8; RX_BUF_SIZE]>,
     len: usize,
     desc: NonNull<RxBufferDescriptor>,
-}
-
-pub struct WriteFrame {
-    bufr: NonNull<[u8; TX_BUF_SIZE]>,
-    desc: NonNull<TxBufferDescriptor>,
-    was_sent: bool,
-}
-
-impl Drop for WriteFrame {
-    fn drop(&mut self) {
-        if !self.was_sent {
-            defmt::println!("Dropping unsent frame!");
-            unsafe { self.dropper(0) }
-        }
-    }
 }
 
 impl Deref for ReadFrame {
@@ -180,20 +187,6 @@ impl Deref for ReadFrame {
 impl DerefMut for ReadFrame {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), self.len) }
-    }
-}
-
-impl Deref for WriteFrame {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { core::slice::from_raw_parts(self.bufr.as_ptr().cast(), TX_BUF_SIZE) }
-    }
-}
-
-impl DerefMut for WriteFrame {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), TX_BUF_SIZE) }
     }
 }
 
@@ -218,6 +211,41 @@ impl Drop for ReadFrame {
     }
 }
 
+/// A to-be-sent ethernet frame
+///
+/// This represents a position in the hardware-based outgoing frame buffer.
+/// Once filled, and `send()` is called, it will be made available to the hardware
+/// to be sent. It should be sent as quickly as reasonably possible, in order to
+/// avoid stalling the outgoing TCP frames.
+pub struct WriteFrame {
+    bufr: NonNull<[u8; TX_BUF_SIZE]>,
+    desc: NonNull<TxBufferDescriptor>,
+    was_sent: bool,
+}
+
+impl Drop for WriteFrame {
+    fn drop(&mut self) {
+        if !self.was_sent {
+            defmt::println!("Dropping unsent frame!");
+            unsafe { self.dropper(0) }
+        }
+    }
+}
+
+impl Deref for WriteFrame {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::slice::from_raw_parts(self.bufr.as_ptr().cast(), TX_BUF_SIZE) }
+    }
+}
+
+impl DerefMut for WriteFrame {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { core::slice::from_raw_parts_mut(self.bufr.as_ptr().cast(), TX_BUF_SIZE) }
+    }
+}
+
 impl WriteFrame {
     unsafe fn dropper(&mut self, len: usize) {
         compiler_fence(Ordering::SeqCst);
@@ -229,12 +257,15 @@ impl WriteFrame {
 
         let mut new_w1 = 0;
         // Bit 31 is zeroed to mark this as "ready"
-        new_w1 |= wrap_bit; // Bit 30: Wrap
-                            // Bits 29:17 are status/reserved bits, okay to clear
-                            // Bit 16 is zeroed to have CRC calc offloaded
-        new_w1 |= 0x0000_8000; // Bit 15: Last Buffer in Frame
-                               // Bit 14 is reserved
-        new_w1 |= len; // Bits 13:0: Size
+        // Bit 30: Wrap
+        new_w1 |= wrap_bit;
+        // Bits 29:17 are status/reserved bits, okay to clear
+        // Bit 16 is zeroed to have CRC calc offloaded
+        // Bit 15: Last Buffer in Frame
+        new_w1 |= 0x0000_8000;
+        // Bit 14 is reserved
+        // Bits 13:0: Size
+        new_w1 |= len;
 
         // Store the word to make it active for the transmit hardware to process.
         desc.set_word_1(new_w1);
@@ -242,7 +273,8 @@ impl WriteFrame {
 
         fence(Ordering::SeqCst);
 
-        // yolo
+        // Conjure the GMAC peripheral so we can trigger a send.
+
         {
             let gmac = &*GMAC::ptr();
             gmac.gmac_ncr.modify(|_r, w| w.tstart().set_bit());
@@ -255,6 +287,15 @@ impl WriteFrame {
 }
 
 impl Gmac {
+    /// Create a new HAL representation of the GMAC peripheral.
+    ///
+    /// Requires the necessary pins to be mapped in the correct mode. It will
+    /// enable the necessary PMC clocks automatically.
+    ///
+    /// Also takes a MAC address in the form of a 6 byte array. For example:
+    ///
+    /// `[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]` would map to the MAC address:
+    /// `01:02:03:04:05:06` in typical notation.
     pub fn new(periph: GMAC, pins: GmacPins, pmc: &mut Pmc, mac_addr: [u8; 6]) -> Result<Self, ()> {
         // Enable the gmac peripheral
         pmc.enable_peripherals(&[PeripheralIdentifier::GMAC])
@@ -277,10 +318,14 @@ impl Gmac {
         Ok(gmac)
     }
 
+    /// Obtain a copy of the configured MAC address
     pub fn mac_addr(&self) -> [u8; 6] {
         self.mac_addr.clone()
     }
 
+    /// Query the relevant status and statistics registers, logging them with `defmt`.
+    ///
+    /// Also clears any active flags.
     pub fn query(&mut self) {
         // Query TSR
         self.periph.gmac_tsr.modify(|r, w| {
@@ -390,6 +435,9 @@ impl Gmac {
         }
     }
 
+    /// Attempt to read a frame from the hardware receive buffers
+    ///
+    /// If a frame has been received, a [ReadFrame](ReadFrame) will be returned.
     pub fn read_frame(&mut self) -> Option<ReadFrame> {
         // Scan through the read frames, and attempt to find one marked as "used"
         RX_BUF_DESCS.iter().find_map(|desc| {
@@ -398,13 +446,16 @@ impl Gmac {
             let ready = (w0 & 0x0000_0001) != 0;
 
             if ready && (addr == 0) {
-                defmt::println!("!!! WHAT?");
+                defmt::panic!("Packet is ready, but the address is zero.");
             }
 
             if ready && (addr != 0) {
                 // Erase address, but leave 'ready' and potentially 'last' bit set.
                 desc.set_word_0(w0 & 0x0000_0003);
                 let len = (desc.get_word_1() & 0x0000_0FFF) as usize;
+
+                // Perform a fence to ensure data is correctly flushed before creating a slice.
+                fence(Ordering::SeqCst);
 
                 let desc_addr = NonNull::new(desc.words.get().cast())?;
                 let buf_addr =
@@ -420,9 +471,14 @@ impl Gmac {
         })
     }
 
+    /// Attempt to reserve a position in the outgoing frame queue
+    ///
+    /// If a spot is available, a [WriteFrame](WriteFrame) will be
+    /// returned. The frame will NOT be sent over the GMAC interface
+    /// until the [send()][WriteFrame::send()] function is called,
+    /// consuming the WriteFrame.
     pub fn alloc_write_frame(&mut self) -> Option<WriteFrame> {
-        // let tsr = self.periph.gmac_tsr.read().bits();
-        // defmt::println!("TSR: {=u32:08x}", tsr);
+        defmt::trace!("TSR: {=u32:08x}", self.periph.gmac_tsr.read().bits());
 
         let desc = &TX_BUF_DESCS[self.next_tx_idx];
         let w1 = desc.get_word_1();
@@ -449,18 +505,24 @@ impl Gmac {
         })
     }
 
+    /// Enable the MIIM (PHY) management port.
+    ///
+    /// This is necessary before calling the other `miim_*` methods.
     fn miim_mgmt_port_enable(&mut self) {
         self.periph.gmac_ncr.modify(|_r, w| w.mpe().set_bit());
     }
 
+    /// Disable the MIIM (PHY) management port.
     fn miim_mgmt_port_disable(&mut self) {
         self.periph.gmac_ncr.modify(|_r, w| w.mpe().clear_bit());
     }
 
+    /// Is the PHY currently busy processing a command/request?
     fn miim_is_busy(&mut self) -> bool {
         self.periph.gmac_nsr.read().idle().bit_is_clear()
     }
 
+    /// Write data to a PHY register
     fn miim_write_data(&mut self, reg_idx: u8, op_data: u16) {
         self.periph.gmac_man.write(|w| {
             w.wzo().clear_bit();
@@ -477,6 +539,7 @@ impl Gmac {
         });
     }
 
+    /// Start the async read of data from a PHY register
     fn miim_start_read(&mut self, reg_idx: u8) {
         self.periph.gmac_man.write(|w| {
             w.wzo().clear_bit();
@@ -493,23 +556,25 @@ impl Gmac {
         });
     }
 
+    /// Obtain the data requested by `miim_start_read()`
     fn miim_read_data_get(&mut self) -> u16 {
         self.periph.gmac_man.read().data().bits()
     }
 
+    /// Perform PHY setup procedures.
     fn miim_post_setup(&mut self) {
         let timer = GlobalRollingTimer::default();
 
-        defmt::println!("Starting MIIM setup");
-        defmt::println!("Enabling management port...");
+        defmt::info!("Starting MIIM setup");
+        defmt::info!("Enabling management port...");
         self.miim_mgmt_port_enable();
 
-        defmt::println!("Waiting for miim idle...");
+        defmt::info!("Waiting for miim idle...");
         let val = self.periph.gmac_nsr.read().bits();
-        defmt::println!("{=u32:08X}", val);
+        defmt::info!("{=u32:08X}", val);
         while self.miim_is_busy() {}
 
-        defmt::println!("Reset PHY...");
+        defmt::info!("Reset PHY...");
 
         self.miim_write_data(0, 0b1000_0000_0000_0000); // 0.15: Software reset
         let start = timer.get_ticks();
@@ -520,7 +585,7 @@ impl Gmac {
         self.miim_start_read(0);
         while self.miim_is_busy() {}
         let val = self.miim_read_data_get();
-        defmt::println!("New Reg 0 Val: {=u16:04X}", val);
+        defmt::info!("New Reg 0 Val: {=u16:04X}", val);
 
         // TODO: Skipping Autonegotiation Adv step (reg 4)...
         // TODO: Skipping Autonegotiation restart since we didn't change anything...
@@ -532,7 +597,7 @@ impl Gmac {
             let val = self.miim_read_data_get();
             // 0b0000_0000_0000_0100
             if (val & 0x0004) != 0 {
-                defmt::println!("Link up!");
+                defmt::info!("Link up!");
                 break;
             }
         }
@@ -554,7 +619,7 @@ impl Gmac {
         });
 
         if self.miim_is_busy() {
-            defmt::println!("Busy at start???");
+            defmt::warn!("Busy at start???");
         }
 
         // //disable all GMAC interrupts for QUEUE 0
@@ -837,6 +902,7 @@ impl Gmac {
     }
 }
 
+/// A buffer descriptor for the incoming PHY queue.
 #[repr(C, align(8))]
 struct RxBufferDescriptor {
     words: UnsafeCell<[u32; 2]>,
@@ -878,6 +944,13 @@ impl RxBufferDescriptor {
     }
 }
 
+/// A buffer descriptor for the outgoing PHY queue
+#[repr(C, align(8))]
+struct TxBufferDescriptor {
+    // TODO: Bitfields for this!
+    words: UnsafeCell<[u32; 2]>,
+}
+
 impl TxBufferDescriptor {
     // NOTE: the software never really needs to read word 0 of the TxBufferDescriptor,
     // as this contains the pointer of the TX buffer, which the software writes.
@@ -914,17 +987,15 @@ impl TxBufferDescriptor {
     }
 }
 
-#[repr(C, align(8))]
-struct TxBufferDescriptor {
-    // TODO: Bitfields for this!
-    words: UnsafeCell<[u32; 2]>,
-}
-
+/// An ethernet frame receive buffer. This is primarily used to enforce
+/// proper alignment.
 #[repr(C, align(8))]
 struct RxBuffer {
     buf: UnsafeCell<[u8; RX_BUF_SIZE]>,
 }
 
+/// An ethernet frame receive buffer. This is primarily used to enforce
+/// proper alignment.
 #[repr(C, align(8))]
 struct TxBuffer {
     buf: UnsafeCell<[u8; TX_BUF_SIZE]>,

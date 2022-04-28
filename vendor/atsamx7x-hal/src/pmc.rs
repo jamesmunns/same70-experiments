@@ -1,3 +1,9 @@
+//! PMC - Power Management Controller
+//!
+//! At the moment, this module has limited support to allow for basic
+//! operation. It is currently used with a 12MHz oscillator to reach
+//! a CPU clock of 300MHz and an MCK of 150 MHz.
+
 use crate::efc::Efc;
 use crate::efc::FlashWaitStates;
 use crate::target_device::PMC;
@@ -5,6 +11,7 @@ use crate::target_device::PMC;
 pub use crate::target_device::pmc::pmc_mckr::MDIV_A as MckDivider;
 pub use crate::target_device::pmc::pmc_mckr::PRES_A as MckPrescaler;
 
+/// A HAL representation of the PMC peripheral
 pub struct Pmc {
     periph: PMC,
     settings: Option<ClockSettings>,
@@ -12,9 +19,18 @@ pub struct Pmc {
 
 #[derive(Debug, PartialEq, defmt::Format, Clone)]
 pub enum PmcError {
+    /// The given peripheral does not support PMC clocking
     ClockingError(PeripheralIdentifier),
+
+    /// The given configuration could not be made. This could be due
+    /// to an invalid request, or an unsupported configuration.
     InvalidConfiguration,
+
+    /// The current code does not support the requested action
     UnimplementedError,
+
+    /// An unexpected, unrecoverable error has occurred. Please
+    /// file an issue.
     InternalError,
 }
 
@@ -69,6 +85,7 @@ pub struct ClockSettings {
 }
 
 impl ClockSettings {
+    /// Calculate the resulting master clock from the given settings request
     pub fn calc_master_clk_mhz(&self) -> Result<u8, PmcError> {
         // NOTE: This is based on Figure 31-1 - "General Clock Distribution Block Diagram"
 
@@ -157,10 +174,12 @@ impl Pmc {
         }
     }
 
+    /// Obtain the currently configured settings
     pub fn settings(&self) -> Option<&ClockSettings> {
         self.settings.as_ref()
     }
 
+    /// Enable PMC clocking for the given peripheral(s).
     pub fn enable_peripherals(&mut self, pids: &[PeripheralIdentifier]) -> Result<(), PmcError> {
         if pids.is_empty() {
             return Ok(());
@@ -222,6 +241,10 @@ impl Pmc {
         Ok(())
     }
 
+    /// Set the PMC clock configuration
+    ///
+    /// NOTE: At the moment, this is only intended to be called once, at startup.
+    /// This is not enforced by software.
     pub fn set_clocks(&mut self, efc: &mut Efc, cfg: ClockSettings) -> Result<(), PmcError> {
         // Calculate the master clock to determine the number of flash wait states.
         // This must be done BEFORE increasing the clock speed, in case the current number
@@ -434,6 +457,9 @@ impl Pmc {
     }
 }
 
+/// A peripheral identifier
+/// This identifier represents the given hardware peripheral known by the
+/// PMC subsystem
 #[allow(non_camel_case_types)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone, defmt::Format)]
 #[repr(u32)]
@@ -591,6 +617,7 @@ pub enum PeripheralIdentifier {
 }
 
 impl PeripheralIdentifier {
+    /// Does this identifier support PMC clocking?
     pub fn supports_pmc_clocking(&self) -> Result<(), ()> {
         use PeripheralIdentifier::*;
         // These pids don't support PMC clocking

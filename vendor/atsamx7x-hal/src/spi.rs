@@ -1,40 +1,6 @@
-/*
-
-SPI Locations
-
-* J503 - 6 pin SPI Header
-    * SPI0_SPCK  - PD22
-    * SPI0_MISO  - PD20
-    * SPI0_MOSI  - PD21
-    * NOTE: No CSn pin!
-* J901 - MikroBUS
-    * SPI0_SPCK  - PD22
-    * SPI0_MISO  - PD20
-    * SPI0_MOSI  - PD21
-    * CS         - PA05
-* J602 - **EXT1**
-    * SPI0_SPCK  - PD22
-    * SPI0_MISO  - PD20
-    * SPI0_MOSI  - PD21
-    * SPI0_NPCS1 - PD25
-* J604 - EXT2
-    * SPI0_SPCK  - PD22
-    * SPI0_MISO  - PD20
-    * SPI0_MOSI  - PD21
-    * SPI0_NPCS3 - PD27
-* Arduino Header
-
-Also brought out to the Ethernet header? Are we reusing any pins?
-Doesn't look like it:
-
->>> hex((1 << 21) | (1 << 20) | (1 << 22))
-'0x700000'
-
-// ((pio_registers_t*)PIO_PORT_D)->PIO_PER = ~0x3ff;
-board.PIOD.pio_per.write(|w| unsafe { w.bits(!0x0000_03FF) });
-
-*/
-
+//! Serial Peripheral Interface
+//!
+//! Note: this driver only supports the SPI0 peripheral.
 use core::num::NonZeroU8;
 
 use groundhog::RollingTimer;
@@ -156,6 +122,7 @@ impl SelectedTarget {
 }
 
 impl Spi0 {
+    /// Create a new SPI HAL struct
     // TODO: Always gives you an 8-bit, MODE0, SPI port.
     pub fn new(
         spi0: SPI0,
@@ -266,13 +233,10 @@ impl Spi0 {
     }
 
 
-    // out: &[0x01, 0x02, 0x00, 0x00, 0x00, 0x00]
-    // in:  &mut [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-
-    // out: &[0x01, 0x02, 0x00, 0x00, 0x00, 0x00]
-    // in:  &mut [0x00, 0x00, 0x10, 0x20, 0x30, 0x40]
-
-    // TODO (AJM): Add API for changing SPI frequency scaler
+    /// Perform a basic transfer over the SPI port.
+    ///
+    /// `txmt` and `recv` buffers must be the same size. The `txmt` buffer will be
+    /// sent over SPI, and the received bytes will be contained in `recv`.
     pub fn transfer_basic(
         &mut self,
         target: SelectedTarget,

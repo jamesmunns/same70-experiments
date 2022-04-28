@@ -1,3 +1,7 @@
+/// Watchdog Timer
+///
+/// Only supports disabling the WDT at this time.
+
 use crate::target_device::WDT;
 
 pub struct Wdt {
