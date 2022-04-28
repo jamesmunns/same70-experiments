@@ -1,6 +1,6 @@
 [package]
 name = "ovl-atsamx7x-hal"
-version = "0.2.0"
+version = "0.2.1"
 authors = [
     "Michal Fita <michal.fita@gmail.com>",
     "Viktor Sonesten <viktor.sonesten@grepit.se>",

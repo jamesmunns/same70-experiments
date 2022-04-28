@@ -1,10 +1,10 @@
-/// Real Time Timer peripheral
-///
-/// This peripheral is hardcoded to tick a 32-bit timer at 8192Hz.
-/// The resulting clock is used for general timing and rtic::Monotonic
-/// purposes.
-///
-/// This timer will roll over approximately every 145 hours.
+//! Real Time Timer peripheral
+//!
+//! This peripheral is hardcoded to tick a 32-bit timer at 8192Hz.
+//! The resulting clock is used for general timing and rtic::Monotonic
+//! purposes.
+//!
+//! This timer will roll over approximately every 145 hours.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use groundhog::RollingTimer;

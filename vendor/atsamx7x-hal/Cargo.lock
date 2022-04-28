@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "ovl-atsamx7x-hal"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cortex-m",
  "defmt",
